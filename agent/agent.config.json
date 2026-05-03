@@ -1,0 +1,56 @@
+{
+  "projectName": "piloop",
+  "constraints": {
+    "maxFilesPerPatch": 3,
+    "maxPatchSizeLines": 500,
+    "maxPatchSizeBytes": 10240,
+    "allowedOperations": [
+      "refactor",
+      "fix",
+      "improve-tests",
+      "dedupe",
+      "optimize",
+      "typing"
+    ],
+    "forbiddenDirectories": ["node_modules", "dist", "build", ".git"],
+    "maxFilesPerAnalysis": 300,
+    "minComplexityThreshold": 10,
+    "staleFileDays": 30,
+    "largeFileLines": 500
+  },
+  "goals": [
+    "reduce complexity",
+    "improve maintainability",
+    "fix recurring errors",
+    "improve type safety",
+    "increase test coverage",
+    "remove dead code",
+    "improve error handling"
+  ],
+  "runFrequencyMinutes": 30,
+  "signals": {
+    "enabled": {
+      "gitModified": true,
+      "gitUntracked": true,
+      "errorLog": true,
+      "testsFailing": true,
+      "todoPresent": true,
+      "codeSmell": true,
+      "staleFile": true,
+      "largeFile": true,
+      "complexityThreshold": true
+    },
+    "todoPatterns": ["TODO", "FIXME", "HACK", "XXX", "WORKAROUND"],
+    "errorLogPath": "./logs/errors.log"
+  },
+  "review": {
+    "requireHumanApproval": false,
+    "autoApproveIfTestsPass": true,
+    "maxRiskLevel": "medium"
+  },
+  "git": {
+    "commitPrefix": "feat(agent):",
+    "branchPrefix": "agent-improvement/",
+    "autoPush": false
+  }
+}

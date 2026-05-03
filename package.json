@@ -1,0 +1,33 @@
+{
+  "name": "piloop",
+  "version": "1.0.0",
+  "description": "Local Autonomous Improvement Agent — self-improving bot for a single code repository",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node --loader ts-node/esm agent/index.ts",
+    "agent:run": "node --loader ts-node/esm agent/index.ts",
+    "agent:review": "node --loader ts-node/esm agent/src/reviewers/cli-reviewer.ts",
+    "agent:signal": "node --loader ts-node/esm agent/src/signals/detect-all.ts",
+    "agent:status": "node --loader ts-node/esm agent/src/actions/status.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepare": "pnpm build"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "diff": "^5.2.0",
+    "globby": "^14.0.2",
+    "picocolors": "^1.1.1",
+    "simple-git": "^3.25.0",
+    "typescript": "^5.6.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.2.0",
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.2",
+    "vitest": "^2.0.0"
+  }
+}

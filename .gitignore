@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+.piloop-current.diff
+agent/logs/*.log
+agent/logs/last-state.json
+*.tsbuildinfo
+.env
+.env.local
