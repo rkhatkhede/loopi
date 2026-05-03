@@ -69,10 +69,17 @@ export class Pipeline {
       this.state.review = review;
 
       if (review.approved) {
-        // Step 8: Apply
-        this.state = { status: "applying" };
-        await this.applyPatch(patch, plan.summary);
-        this.state = { status: "completed" };
+        // Check if patch has meaningful content
+        const hasRealChanges = patch.diff.includes("@@");
+        if (!hasRealChanges) {
+          logger.warn("Patch has no real changes (empty diff). Skipping apply.");
+          this.state = { ...this.state, status: "completed" };
+        } else {
+          // Step 8: Apply
+          this.state = { status: "applying" };
+          await this.applyPatch(patch, plan.summary);
+          this.state = { status: "completed" };
+        }
       } else {
         logger.warn(`Patch rejected: ${review.recommendation}`);
         this.state = {

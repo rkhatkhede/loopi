@@ -2,8 +2,9 @@ node_modules/
 dist/
 build/
 .piloop-current.diff
-agent/logs/*.log
-agent/logs/last-state.json
+agent/workflows/pending/*.diff
+agent/workflows/approved/*.diff
+agent/logs/
 *.tsbuildinfo
 .env
 .env.local

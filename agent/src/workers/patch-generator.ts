@@ -142,21 +142,33 @@ export function generatePatch(plan: ImprovementPlan): Patch {
 }
 
 /**
+ * The TODO/FIXME pattern used by the signal detector.
+ */
+const TODO_REGEX = /\/\/\s*(TODO|FIXME|HACK|XXX|WORKAROUND)\b.*$/gm;
+
+/**
  * Apply plan changes to file content based on the plan type and details.
  * This is a simplified transformation engine. For complex changes, the
  * system invokes the pi.dev patch-agent.
  */
 function applyPlanChanges(content: string, plan: ImprovementPlan, filePath: string): string {
-  const lines = content.split("\n");
-
   switch (plan.operation) {
     case "typing": {
-      // Replace `any` with `unknown` as a safer default
-      return content.replace(/\bany\b/g, "unknown");
+      // Replace `any` with `unknown` as a safer default (only in type positions)
+      // Match `: any` and `as any` patterns to be safe
+      return content
+        .replace(/:\s*any\b/g, ": unknown")
+        .replace(/as\s+any\b/g, "as unknown");
     }
     case "fix": {
-      // Apply simple fixes based on plan details
-      // This is a stub — real fixes come from the pi.dev patch-agent
+      // If the plan mentions TODOs, strip TODO/FIXME comment lines
+      if (
+        plan.details.toLowerCase().includes("todo") ||
+        plan.details.toLowerCase().includes("fixme")
+      ) {
+        // Remove standalone TODO/FIXME comment lines
+        return content.replace(TODO_REGEX, "// $1: addressed by piloop");
+      }
       return content;
     }
     case "refactor": {

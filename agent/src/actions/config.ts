@@ -26,3 +26,6 @@ export function reloadConfig(): AgentConfig {
   _config = null;
   return loadConfig();
 }
+
+// TODO: Add schema validation for agent.config.json
+// TODO: Add env variable override support
