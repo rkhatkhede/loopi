@@ -302,10 +302,86 @@ function BranchesPanel({ state, onAction }) {
   );
 }
 
+function OpportunitiesPanel({ state }) {
+  const opps = state?.opportunities ?? [];
+  if (!opps.length) return null;
+
+  const byStatus = {};
+  opps.forEach(o => { byStatus[o.status] = (byStatus[o.status] || 0) + 1; });
+
+  const statusColor = { suggested: '#8b949e', accepted: '#58a6ff', applied: '#3fb950', rejected: '#f85149' };
+
+  return h('div', { className: 'panel' },
+    h('div', { className: 'panel-title' }, 'Opportunities (' + opps.length + ')'),
+    h('div', { className: 'panel-body', style: { maxHeight: 200, overflowY: 'auto' } },
+      h('div', { style: { display: 'flex', gap: 12, marginBottom: 8, fontSize: 12 } },
+        Object.entries(byStatus).map(([s, c]) =>
+          h('span', { key: s, style: { color: statusColor[s] || '#8b949e' } },
+            capitalize(s) + ': ' + c
+          )
+        )
+      ),
+      opps.slice(0, 15).map(o =>
+        h('div', {
+          key: o.id || o.title,
+          style: { display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', fontSize: 12, borderBottom: '1px solid #21262d' }
+        },
+          h('span', { style: { width: 8, height: 8, borderRadius: '50%', background: statusColor[o.status] || '#8b949e', flexShrink: 0 } }),
+          h('span', { style: { flex: 1, color: '#c9d1d9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            (o.title || '').slice(0, 50)
+          ),
+          h('span', { style: { fontSize: 10, color: '#484f58' } }, o.status),
+        )
+      ),
+      opps.length > 15
+        ? h('div', { style: { textAlign: 'center', fontSize: 11, color: '#484f58', paddingTop: 4 } },
+            '... and ' + (opps.length - 15) + ' more')
+        : null,
+    )
+  );
+}
+
+function PatternsPanel({ state }) {
+  const patterns = state?.patterns ?? [];
+  if (!patterns.length) return null;
+
+  const applied = patterns.filter(p => p.outcome === 'applied').length;
+  const suggested = patterns.filter(p => p.outcome === 'suggested').length;
+
+  return h('div', { className: 'panel' },
+    h('div', { className: 'panel-title' }, 'Patterns (' + patterns.length + ')'),
+    h('div', { className: 'panel-body', style: { maxHeight: 200, overflowY: 'auto' } },
+      h('div', { style: { fontSize: 12, color: '#8b949e', marginBottom: 6 } },
+        'Applied: ' + applied + ' | Suggested: ' + suggested
+      ),
+      patterns.slice(0, 10).map(p =>
+        h('div', {
+          key: p.id || p.summary,
+          style: { display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', fontSize: 12, borderBottom: '1px solid #21262d' }
+        },
+          h('span', { style: { color: p.outcome === 'applied' ? '#3fb950' : '#8b949e' } },
+            p.outcome === 'applied' ? '\u2713' : '\u25CB'
+          ),
+          h('span', { style: { flex: 1, color: '#c9d1d9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            (p.summary || '').slice(0, 50)
+          ),
+          p.tags && p.tags.length
+            ? h('span', { style: { fontSize: 10, color: '#484f58' } }, p.tags.slice(0, 2).join(', '))
+            : null,
+        )
+      ),
+      patterns.length > 10
+        ? h('div', { style: { textAlign: 'center', fontSize: 11, color: '#484f58', paddingTop: 4 } },
+            '... and ' + (patterns.length - 10) + ' more')
+        : null,
+    )
+  );
+}
+
 function LogPanel({ logs, logRef }) {
   const [autoScroll, setAutoScroll] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
   const innerRef = useRef(null);
-  const scrollTimerRef = useRef(null);
 
   // Scroll to bottom when new logs arrive (if auto-scroll is enabled)
   useEffect(() => {
@@ -320,18 +396,38 @@ function LogPanel({ logs, logRef }) {
     if (logRef) logRef.current = el;
   }, [logRef]);
 
+  const filteredLogs = searchTerm
+    ? (logs || []).filter(l => l.toLowerCase().includes(searchTerm.toLowerCase()))
+    : logs || [];
+
   return h('div', { className: 'panel', style: { gridColumn: '1 / -1' } },
-    h('div', { className: 'panel-title', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
-      h('span', null, 'Log (' + (logs?.length ?? 0) + ' lines)'),
-      h('button', {
-        className: 'log-scroll-btn',
-        onClick: () => setAutoScroll(!autoScroll)
-      }, autoScroll ? 'Auto-scroll ON' : 'Auto-scroll OFF'),
+    h('div', { className: 'panel-title', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 } },
+      h('span', null, 'Log (' + (logs?.length ?? 0) + ' lines' +
+        (searchTerm ? ', showing ' + filteredLogs.length : '') + ')'),
+      h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+        h('input', {
+          type: 'text',
+          placeholder: 'Filter logs...',
+          value: searchTerm,
+          onInput: (e) => setSearchTerm(e.target.value),
+          style: {
+            padding: '2px 8px', fontSize: 12, borderRadius: 4, border: '1px solid #30363d',
+            background: '#0d1117', color: '#c9d1d9', width: 140, outline: 'none',
+          }
+        }),
+        h('button', {
+          className: 'log-scroll-btn',
+          onClick: () => setAutoScroll(!autoScroll)
+        }, autoScroll ? 'Auto ON' : 'Auto OFF'),
+      ),
     ),
-    h('div', { className: 'log-panel panel-body', ref: setRef },
-      (!logs || logs.length === 0)
-        ? h('div', { className: 'empty' }, 'No log entries yet')
-        : logs.map((line, i) =>
+    h('div', {
+      className: 'log-panel panel-body', ref: setRef,
+      style: { maxHeight: '400px', overflowY: 'auto' }
+    },
+      (!filteredLogs || filteredLogs.length === 0)
+        ? h('div', { className: 'empty' }, searchTerm ? 'No logs match filter' : 'No log entries yet')
+        : filteredLogs.map((line, i) =>
             h('div', { key: i, className: 'log-line ' + logClass(line) }, line)
           ),
     )
@@ -504,7 +600,9 @@ function App() {
           h('span', null, 'Cycle: ', h('span', { className: 'num' }, String(state.cycleNumber ?? 0))),
           h('span', null, 'Findings: ', h('span', { className: 'num' }, String(state.pipeline?.findings ?? 0))),
           h('span', null, 'Branches: ', h('span', { className: 'num' }, String(state.branches?.length ?? 0))),
-          h('span', null, 'Patterns: ', h('span', { className: 'num' }, String(state.patternCount ?? 0))),
+          h('span', null, 'Opportunities: ', h('span', { className: 'num' }, String(state.opportunities?.length ?? 0))),
+          h('span', null, 'Patterns: ', h('span', { className: 'num' }, String(state.patterns?.length ?? 0))),
+          h('span', null, 'Log lines: ', h('span', { className: 'num' }, String(state.logs?.length ?? 0))),
           state.lastRefresh
             ? h('span', { className: 'ts' }, 'Last updated: ' + new Date(state.lastRefresh).toLocaleTimeString())
             : null,
@@ -521,9 +619,11 @@ function App() {
     h('div', { className: 'grid' },
       h(PipelinePanel, { state }),
       h(BranchesPanel, { state, onAction: handleAction }),
+      h(OpportunitiesPanel, { state }),
+      h(PatternsPanel, { state }),
     ),
 
-    // Log
+    // Log (full width at bottom)
     h(LogPanel, { logs: state?.logs ?? [], logRef }),
   );
 }
@@ -554,7 +654,7 @@ function collectApiState(): Record<string, unknown> {
     }
   } catch { /* ignore */ }
 
-  // Logs
+  // Logs — send ALL lines (browser handles scrolling)
   const logs: string[] = [];
   try {
     const logDir = resolve(process.cwd(), ".pi/loopi/logs");
@@ -562,7 +662,7 @@ function collectApiState(): Record<string, unknown> {
       const files = readdirSync(logDir).filter(f => f.endsWith(".log")).sort().reverse();
       if (files.length > 0) {
         const content = readFileSync(resolve(logDir, files[0]!), "utf-8").trim().split("\n");
-        logs.push(...content.slice(-50)); // last 50 lines
+        logs.push(...content);
       }
     }
   } catch { /* ignore */ }
@@ -578,7 +678,6 @@ function collectApiState(): Record<string, unknown> {
   let milestones: Array<Record<string, unknown>> = [];
   let goals: Array<Record<string, unknown>> = [];
   let tasks: Array<Record<string, unknown>> = [];
-  let activeOpportunity = "";
   try {
     const v = readVision();
     if (v) {
@@ -592,27 +691,37 @@ function collectApiState(): Record<string, unknown> {
   } catch { /* ignore */ }
   try { goals = readGoals() as unknown as Array<Record<string, unknown>>; } catch { /* ignore */ }
   try { tasks = readTasks() as unknown as Array<Record<string, unknown>>; } catch { /* ignore */ }
+
+  // Opportunities (full history)
+  let opportunities: Array<Record<string, unknown>> = [];
+  let activeOpportunity = "";
   try {
-    const history = readOpportunityHistory();
-    const active = history.find(o => o.status === "accepted" || o.status === "suggested");
-    if (active) activeOpportunity = active.title;
+    opportunities = readOpportunityHistory() as unknown as Array<Record<string, unknown>>;
+    const active = opportunities.find(o => o.status === "accepted" || o.status === "suggested");
+    if (active) activeOpportunity = (active.title as string) || "";
   } catch { /* ignore */ }
 
-  // Patterns
-  let patternCount = 0;
-  try { patternCount = readPatterns().length; } catch { /* ignore */ }
+  // Patterns (full list)
+  let patterns: Array<Record<string, unknown>> = [];
+  try { patterns = readPatterns() as unknown as Array<Record<string, unknown>>; } catch { /* ignore */ }
+
+  // Pipeline metrics
+  const pipelineMetrics: Record<string, unknown> = {
+    status: prog.status,
+    step: prog.step || "",
+    message: prog.message || "",
+    findings: prog.findings ?? 0,
+    patches: prog.patches ?? 0,
+    autoMerged: prog.autoMerged ?? 0,
+    autoRejected: prog.autoRejected ?? 0,
+    error: prog.error ?? null,
+  };
+  if (prog.status === "running" && prog.step) {
+    pipelineMetrics.duration = Date.now(); // start time for elapsed calc
+  }
 
   return {
-    pipeline: {
-      status: prog.status,
-      step: prog.step || "",
-      message: prog.message || "",
-      findings: prog.findings ?? 0,
-      patches: prog.patches ?? 0,
-      autoMerged: prog.autoMerged ?? 0,
-      autoRejected: prog.autoRejected ?? 0,
-      error: prog.error ?? null,
-    },
+    pipeline: pipelineMetrics,
     cycleNumber: prog.status === "running" || prog.status === "completed" ? 1 : 0,
     branches,
     pendingCount,
@@ -622,8 +731,9 @@ function collectApiState(): Record<string, unknown> {
     milestones,
     goals,
     tasks,
+    opportunities,
+    patterns,
     activeOpportunity: activeOpportunity || null,
-    patternCount,
     lastRefresh: Date.now(),
   };
 }
