@@ -25,7 +25,7 @@ import {
   readVision, readOpportunityHistory,
   approvePending, rejectPending,
   approveFeatureBranch, rejectFeatureBranch, getActiveFeatureBranches,
-  promoteToMain, readPatterns, PIPELINE_SPEC
+  promoteToMain, readPatterns
 } from "../pipeline.js";
 import { getPipelineProgress } from "../pipeline-runner.js";
 import { logger } from "../actions/logger.js";
@@ -321,76 +321,13 @@ function render(state: DashboardState, layout: Layout): string {
   lines.push(BORDER_BL + repeat(BORDER_H, cols - 2) + BORDER_BR);
 
   // Help bar
-  const help = pc.dim(" [q] quit  [r] refresh  [Space] toggle auto  [a] approve  [R] reject  [p] promote  [?] spec ");
+  const help = pc.dim(" [q] quit  [r] refresh  [Space] toggle auto  [a] approve  [R] reject  [p] promote ");
   const helpLine = help.padEnd(cols).slice(0, cols);
   lines.push(" " + helpLine);
 
   // ── Assemble ──
   const output = hideCursor() + cursorTo(1, 1) + "\n" + lines.join("\n");
   return output;
-}
-
-// ─── Overlay: pipeline spec ───
-
-function renderSpecOverlay(cols: number, rows: number): string {
-  const spec = PIPELINE_SPEC.trim();
-  const specLines = spec.split("\n");
-
-  // Calculate overlay dimensions
-  const overlayW = Math.min(cols - 4, 80);
-  const overlayH = Math.min(rows - 4, specLines.length + 8);
-  const startRow = Math.floor((rows - overlayH) / 2);
-  const startCol = Math.floor((cols - overlayW) / 2);
-
-  const output: string[] = [];
-
-  // Push cursor to overlay position
-  output.push(cursorTo(startRow, startCol));
-
-  // Top border
-  output.push(pc.cyan(boxTop(overlayW)));
-
-  // Welcome header
-  const welcome = pc.bold(pc.green(" ⚡ loopi — Local Autonomous Improvement Agent "));
-  output.push(pc.cyan(BORDER_V) + welcome.padEnd(overlayW - 2).slice(0, overlayW - 2) + pc.cyan(BORDER_V));
-
-  output.push(pc.cyan(BORDER_V) + " This dashboard monitors the pipeline. The pi agent   " + pc.cyan(BORDER_V));
-  output.push(pc.cyan(BORDER_V) + " runs the steps below via subagent() calls.          " + pc.cyan(BORDER_V));
-
-  // Divider
-  output.push(pc.cyan(BORDER_LT) + repeat(pc.cyan(BORDER_H), overlayW - 2) + pc.cyan(BORDER_RT));
-
-  // Title
-  const title = pc.bold(" PIPELINE SPECIFICATION ");
-  output.push(pc.cyan(BORDER_V) + title.padEnd(overlayW - 2).slice(0, overlayW - 2) + pc.cyan(BORDER_V));
-
-  // Divider
-  output.push(pc.cyan(BORDER_LT) + repeat(pc.cyan(BORDER_H), overlayW - 2) + pc.cyan(BORDER_RT));
-
-  // Content (scrollable — show what fits)
-  const contentH = overlayH - 4;
-  const visible = specLines.slice(0, contentH);
-  for (const line of visible) {
-    const truncated = line.length > overlayW - 4 ? line.slice(0, overlayW - 4) + "…" : line;
-    output.push(pc.cyan(BORDER_V) + " " + pc.dim(truncated).padEnd(overlayW - 3).slice(0, overlayW - 3) + pc.cyan(BORDER_V));
-  }
-
-  // Fill remaining
-  for (let i = visible.length; i < contentH; i++) {
-    output.push(pc.cyan(BORDER_V) + repeat(" ", overlayW - 2) + pc.cyan(BORDER_V));
-  }
-
-  // Bottom border
-  output.push(pc.cyan(boxBot(overlayW)));
-
-  // Status summary line below the box
-  const summary = buildSummaryLine();
-  output.push(cursorTo(startRow + overlayH, startCol) + " " + summary);
-
-  // Dismiss hint
-  output.push(cursorTo(startRow + overlayH + 1, startCol) + pc.dim(" Press any key to close this screen and open the dashboard "));
-
-  return hideCursor() + eraseDown() + output.join("\n");
 }
 
 /**
@@ -500,7 +437,7 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   let running = true;
   let autoRefresh = true;
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
-  let showingSpec = false; // Pipeline spec overlay (hidden by default)
+  let pipelineStarted = false;
 
   function getDimensions() {
     return { cols: stdout.columns ?? 80, rows: stdout.rows ?? 24 };
@@ -509,11 +446,6 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   function refresh() {
     if (!running) return;
     const { cols, rows } = getDimensions();
-
-    if (showingSpec) {
-      stdout.write(renderSpecOverlay(cols, rows));
-      return;
-    }
 
     const layout = computeLayout(rows, cols);
     const state = collectState(layout);
@@ -537,18 +469,6 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   function onData(data: string) {
     const char = data.toLowerCase();
 
-    // If showing spec overlay, any key dismisses it and starts the pipeline
-    if (showingSpec) {
-      showingSpec = false;
-      startAutoRefresh();
-      // Auto-start the pipeline in background
-      import("../pipeline-runner.js").then(({ runAutoPipeline }) => {
-        runAutoPipeline().catch(() => {});
-      });
-      refresh();
-      return;
-    }
-
     if (data === "\u0003" || char === "q") {
       // Ctrl+C or q
       running = false;
@@ -568,13 +488,6 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
       } else {
         stopAutoRefresh();
       }
-      refresh();
-      return;
-    }
-
-    if (data === "?") {
-      showingSpec = true;
-      stopAutoRefresh();
       refresh();
       return;
     }
@@ -647,7 +560,13 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
 
   // Render initial state
   refresh();
+
+  // Auto-start the pipeline immediately (no keypress needed)
+  pipelineStarted = true;
   startAutoRefresh();
+  import("../pipeline-runner.js").then(({ runAutoPipeline }) => {
+    runAutoPipeline().catch(() => {});
+  });
 
   // Wait for quit
   while (running) {

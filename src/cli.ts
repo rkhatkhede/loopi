@@ -18,7 +18,7 @@ import { runOnboarding } from "./actions/onboarding.js";
 import { runDashboard } from "./tui/dashboard.js";
 import { installAgents } from "./actions/install.js";
 import { initProject } from "./actions/init.js";
-import { readVision } from "./pipeline.js";
+import { RPCClient } from "./rpc-client.js";
 import pc from "picocolors";
 
 async function main() {
@@ -34,6 +34,25 @@ async function main() {
     const pkg = await import("../package.json", { with: { type: "json" } });
     console.log(pkg.default.version);
     exit(0);
+  }
+
+  // Check pi.dev CLI is available
+  const piAvailable = await RPCClient.isAvailable();
+  if (!piAvailable) {
+    console.error(
+      pc.red("\n✖ pi.dev CLI is required but not found.")
+    );
+    console.error(
+      pc.yellow(
+        "  Install it: npm install -g @mariozechner/pi-coding-agent"
+      )
+    );
+    console.error(
+      pc.dim(
+        "  Then run: pi (to set up API keys and complete first-time setup)"
+      )
+    );
+    process.exit(1);
   }
 
   // Auto-install agents (idempotent — always present after first run)
@@ -89,7 +108,7 @@ function showHelp(): void {
 
   Dashboard keys:
     [a] approve patch     [R] reject patch       [p] promote dev→main
-    [?] show pipeline spec [q] quit              [r] refresh
+    [Space] toggle auto-refresh  [q] quit        [r] refresh
 
   Examples:
     pnpx @rkhatkhede/loopi
