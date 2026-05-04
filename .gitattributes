@@ -1,0 +1,19 @@
+# Auto-detect and normalize line endings
+* text=auto
+
+# Shell scripts must stay LF
+*.sh text eol=lf
+
+# TypeScript/JavaScript — normalized
+*.ts text
+*.js text
+*.json text
+
+# Markdown — normalized
+*.md text
+
+# Binary files — untouched
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
