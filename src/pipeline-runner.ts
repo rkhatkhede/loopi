@@ -11,7 +11,7 @@ import { existsSync, appendFileSync, mkdirSync } from "fs";
 import { resolve } from "path";
 import crypto from "crypto";
 import { logger } from "./actions/logger.js";
-import { readVision, saveVision, saveOpportunity, writePending } from "./pipeline.js";
+import { readVision, saveVision, saveOpportunity, applyPatch } from "./pipeline.js";
 import type { Opportunity, Patch } from "./types/index.js";
 
 // ─── Helpers ───
@@ -278,13 +278,19 @@ async function generatePatches(opportunity: Opportunity): Promise<Patch[]> {
   return patches;
 }
 
-// ─── Step 5: Write pending ───
+// ─── Step 5: Auto-apply patches ───
 
-async function writePendingPatches(patches: Patch[]) {
-  log(`Step 5/5: Writing ${patches.length} patch/patches for review...`);
-  for (const patch of patches) {
-    writePending(patch);
-    log(`  Written: ${patch.id.slice(0, 8)}`);
+async function autoApplyPatches(patches: Patch[]) {
+  log(`Step 5/5: Auto-applying ${patches.length} patch/patches to dev...`);
+  for (let i = 0; i < patches.length; i++) {
+    const patch = patches[i]!;
+    const summary = `loopi: auto-fix (${patch.files.join(", ")})`;
+    try {
+      const commitHash = await applyPatch(patch.diff, summary, ".");
+      log(`  ✓ Applied #${i + 1}: ${commitHash.slice(0, 8)} — ${summary}`);
+    } catch (e: any) {
+      log(`  ✖ Failed #${i + 1}: ${e.message}`);
+    }
   }
   await sleep(10);
 }
@@ -376,12 +382,12 @@ export async function runAutoPipeline(): Promise<PipelineProgress> {
     await sleep(10);
 
     // Step 5 — Write pending
-    _progress = { ..._progress, step: "Writing patches", message: "Writing patches for review..." };
+    _progress = { ..._progress, step: "Applying patches", message: "Auto-applying patches to dev..." };
     log(`  → ${_progress.step}`);
-    await writePendingPatches(patches);
+    await autoApplyPatches(patches);
 
     _progress.status = "completed";
-    _progress.message = `${patches.length} patch(es) ready for review`;
+    _progress.message = `${patches.length} patch(es) auto-applied to dev`;
     log("Pipeline complete.");
   } catch (e: any) {
     _progress.status = "failed";
