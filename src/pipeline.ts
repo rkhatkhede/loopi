@@ -52,6 +52,10 @@ import {
   type Pattern,
   type Config,
   type CycleResult,
+  GoalSchema,
+  type Goal,
+  TaskSchema,
+  type Task,
   AGENTS,
 } from "./types/index.js";
 
@@ -273,6 +277,107 @@ export function savePattern(pattern: Pattern): void {
   logger.info(`Pattern saved: ${pattern.summary}`);
 }
 
+// ─── Goals ───
+
+const GOALS_FILE = ".pi/loopi/goals.json";
+
+/**
+ * Read all goals from disk.
+ */
+export function readGoals(): Goal[] {
+  const path = resolve(process.cwd(), GOALS_FILE);
+  if (!existsSync(path)) return [];
+  try {
+    return z.array(GoalSchema).parse(JSON.parse(readFileSync(path, "utf-8")));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save or update a goal using atomic write.
+ */
+export function saveGoal(goal: Goal): void {
+  const path = resolve(process.cwd(), GOALS_FILE);
+  const existing = readGoals();
+  const idx = existing.findIndex((g) => g.id === goal.id);
+  if (idx >= 0) {
+    existing[idx] = goal;
+  } else {
+    existing.push(goal);
+  }
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
+  renameSync(tmpPath, path);
+}
+
+/**
+ * Replace all goals atomically (used during goal regeneration).
+ */
+export function replaceGoals(goals: Goal[]): void {
+  const path = resolve(process.cwd(), GOALS_FILE);
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(goals, null, 2), "utf-8");
+  renameSync(tmpPath, path);
+}
+
+// ─── Tasks ───
+
+const TASKS_FILE = ".pi/loopi/tasks.json";
+
+/**
+ * Read all tasks from disk.
+ */
+export function readTasks(): Task[] {
+  const path = resolve(process.cwd(), TASKS_FILE);
+  if (!existsSync(path)) return [];
+  try {
+    return z.array(TaskSchema).parse(JSON.parse(readFileSync(path, "utf-8")));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save or update a task using atomic write.
+ */
+export function saveTask(task: Task): void {
+  const path = resolve(process.cwd(), TASKS_FILE);
+  const existing = readTasks();
+  const idx = existing.findIndex((t) => t.id === task.id);
+  if (idx >= 0) {
+    existing[idx] = task;
+  } else {
+    existing.push(task);
+  }
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
+  renameSync(tmpPath, path);
+}
+
+/**
+ * Update the status of multiple tasks at once (e.g. mark all failed).
+ */
+export function updateTaskStatus(
+  taskIds: string[],
+  status: Task["status"]
+): void {
+  const tasks = readTasks();
+  let changed = false;
+  for (const task of tasks) {
+    if (taskIds.includes(task.id) && task.status !== status) {
+      task.status = status;
+      if (status === "completed") task.completedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  const path = resolve(process.cwd(), TASKS_FILE);
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(tasks, null, 2), "utf-8");
+  renameSync(tmpPath, path);
+}
+
 /**
  * Apply a patch using the dev-branch workflow:
  *
@@ -369,14 +474,10 @@ export async function applyPatch(
     // Commit
     await createCommit(`${cfg.git.commitPrefix} ${summary}`);
 
-    // Switch back to dev and merge
+    // Switch back to dev — changes stay on the feature branch for review
     await checkoutBranch(baseBranch);
-    await mergeBranch(branchName, `${cfg.git.commitPrefix} merge ${summary}`);
 
-    // Clean up feature branch
-    await deleteBranch(branchName);
-
-    logger.info(`Applied ${summary} → ${baseBranch} via ${branchName}`);
+    logger.info(`Applied ${summary} → feature branch ${branchName} (waiting for approval)`);
     return branchName;
   } finally {
     // Release lock
@@ -431,6 +532,68 @@ export async function approvePending(targetRoot = "."): Promise<boolean> {
   moveToApproved(patchId);
   logger.info(`Applied and approved: ${latest}`);
   return true;
+}
+
+/**
+ * Approve a feature branch — merge it into dev and delete the branch.
+ */
+export async function approveFeatureBranch(
+  branchName: string,
+  targetRoot = "."
+): Promise<boolean> {
+  const git = getGit(targetRoot);
+  const currentBranch = await getCurrentBranch();
+
+  try {
+    // Ensure we're on dev
+    if (currentBranch !== "dev") {
+      await checkoutBranch("dev");
+    }
+
+    // Merge feature branch into dev (squash merge with a single commit)
+    const cfg = getConfig();
+    await mergeBranch(branchName, `${cfg.git.commitPrefix} merge ${branchName}`);
+
+    // Delete the feature branch
+    await deleteBranch(branchName);
+
+    logger.info(`Approved: merged ${branchName} into dev`);
+    return true;
+  } catch (err) {
+    logger.error(`Failed to approve ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+/**
+ * Reject a feature branch — delete it without merging.
+ */
+export async function rejectFeatureBranch(
+  branchName: string,
+  targetRoot = "."
+): Promise<boolean> {
+  try {
+    await deleteBranch(branchName);
+    logger.info(`Rejected: deleted ${branchName}`);
+    return true;
+  } catch (err) {
+    logger.error(`Failed to reject ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+/**
+ * List active feature branches (branches with the configured prefix).
+ */
+export async function getActiveFeatureBranches(targetRoot = "."): Promise<string[]> {
+  const git = getGit(targetRoot);
+  const cfg = getConfig();
+  const prefix = cfg.git.branchPrefix;
+  const branches = await git.branchLocal();
+  return branches.all
+    .filter((b: string) => b.startsWith(prefix))
+    .sort()
+    .reverse();
 }
 
 /**

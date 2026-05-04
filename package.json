@@ -1,39 +1,37 @@
 {
   "name": "@rkhatkhede/loopi",
-  "version": "0.2.3",
+  "version": "0.2.8",
   "description": "Local Autonomous Improvement Agent — self-improving bot for any code repository",
   "type": "module",
   "bin": {
-    "loopi": "dist/cli.js"
+    "loopi": "./dist/cli.js"
   },
   "files": [
     "dist/",
-    "agents/",
-    "README.md"
+    "agents/"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/cli.js",
-    "clean": "rm -rf dist",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "tsc --noEmit",
-    "prepublishOnly": "pnpm build"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "picocolors": "^1.1.1",
-    "simple-git": "^3.25.0",
-    "zod": "^4.4.2"
+    "zod": "^3.24.4"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.6.0",
-    "vitest": "^2.0.0"
+    "@types/node": "^22.14.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rkhatkhede/loopi.git"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -13,3 +13,6 @@ build/
 .env
 .env.local
 .npmrc
+
+# Temp/test artifacts
+*est_pi.*

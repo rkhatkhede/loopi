@@ -1,25 +1,32 @@
 /**
  * loopi TUI Dashboard
  *
- * A real-time terminal dashboard showing the system overview.
- * Uses ANSI escape codes and picocolors — zero additional dependencies.
+ * Hands-off autonomous improvement agent.
+ * Runs in background — human checks in periodically.
  *
- * Launched via: loopi
+ * Pipeline auto-scans, creates feature branches per task,
+ * generates patches, self-reviews, and merges approved patches
+ * into dev. Human promotes dev → main when ready.
  *
  * Controls:
  *   q        — Quit dashboard
  *   r        — Force refresh
  *   Space    — Toggle auto-refresh
- *   a        — Approve latest pending patch
- *   R (shift) — Reject latest pending patch
+ *   a        — Manually approve latest feature branch (merge into dev)
+ *   R (shift) — Reject latest feature branch (delete)
  *   p        — Promote dev → main
- *   ?        — Show pipeline spec (any key to dismiss)
+ *   ?        — Show pipeline spec
  */
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "../actions/config.js";
 import { listPending, listApproved } from "../actions/pr.js";
-import { readVision, readOpportunityHistory, approvePending, rejectPending, promoteToMain, readPatterns, PIPELINE_SPEC } from "../pipeline.js";
+import {
+  readVision, readOpportunityHistory,
+  approvePending, rejectPending,
+  approveFeatureBranch, rejectFeatureBranch, getActiveFeatureBranches,
+  promoteToMain, readPatterns
+} from "../pipeline.js";
 import { getPipelineProgress } from "../pipeline-runner.js";
 import { logger } from "../actions/logger.js";
 import pc from "picocolors";
@@ -34,6 +41,9 @@ function cursorTo(row: number, col: number): string {
 }
 function clearScreen(): string {
   return `${CSI}2J`;
+}
+function eraseDown(): string {
+  return `${CSI}J`;
 }
 function hideCursor(): string {
   return `${CSI}?25l`;
@@ -96,11 +106,32 @@ interface DashboardState {
   rejectedCount: number;
   logs: string[];
   error?: string;
+  featureBranches: string[];
+  appliedCount: number;
+}
+
+function getFeatureBranches(): string[] {
+  let prefix = "loopi/";
+  try {
+    const cfg = loadConfig();
+    if (cfg?.git?.branchPrefix) prefix = cfg.git.branchPrefix;
+  } catch { /* use default */ }
+  const refsDir = resolve(process.cwd(), ".git/refs/heads");
+  if (!existsSync(refsDir)) return [];
+  try {
+    return readdirSync(refsDir)
+      .filter((f) => f.startsWith(prefix))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
 }
 
 function collectState(layout: Layout): DashboardState {
   const prog = getPipelineProgress();
   const cwd = process.cwd();
+  const featureBranches = getFeatureBranches();
   const logLines: string[] = [];
 
   // Read log file
@@ -145,12 +176,14 @@ function collectState(layout: Layout): DashboardState {
     currentStep: prog.step || "—",
     currentAgent: "loopi",
     lastResult: prog.message || "—",
-    currentOpportunity: opp || (prog.findings > 0 ? `${prog.findings} issues, ${prog.patches} patches` : "—"),
+    currentOpportunity: opp || (prog.findings > 0 ? `${prog.findings} issues` : "—"),
     pendingCount: pending,
     approvedCount: approved,
     rejectedCount: 0,
     logs: logLines,
     error: prog.error,
+    featureBranches,
+    appliedCount: prog.autoMerged ?? prog.patches,
   };
 }
 
@@ -210,7 +243,7 @@ function logColor(line: string): string {
 function render(state: DashboardState, layout: Layout): string {
   const { cols, rows } = layout;
   if (cols < 50 || rows < 15) {
-    return hideCursor() + cursorTo(1, 1) + clearScreen() +
+    return hideCursor() + cursorTo(1, 1) + eraseDown() +
       pc.red("Terminal too small. Need at least 50x15.") + showCursor();
   }
 
@@ -236,9 +269,9 @@ function render(state: DashboardState, layout: Layout): string {
 
   // Workflows content
   const wfLines = [
-    ` Pending:  ${pc.yellow(String(state.pendingCount))} diff(s)`,
-    ` Approved: ${pc.green(String(state.approvedCount))} diff(s)`,
-    ` Rejected: ${state.rejectedCount > 0 ? pc.red(String(state.rejectedCount)) : "0"} diff(s)`,
+    ` Branches: ${pc.cyan(String(state.featureBranches.length || 0))} pending`,
+    ...state.featureBranches.slice(0, 3).map((b) => `   ${pc.dim(b.slice(0, 50))}`),
+    ` Diff files: ${pc.yellow(String(state.pendingCount))} pending / ${pc.green(String(state.approvedCount))} done`,
     "",
   ];
 
@@ -288,76 +321,13 @@ function render(state: DashboardState, layout: Layout): string {
   lines.push(BORDER_BL + repeat(BORDER_H, cols - 2) + BORDER_BR);
 
   // Help bar
-  const help = pc.dim(" [q] quit  [r] refresh  [Space] toggle auto  [a] approve  [R] reject  [p] promote  [?] spec ");
+  const help = pc.dim(" [q] quit  [r] refresh  [Space] toggle auto  [a] approve  [R] reject  [p] promote ");
   const helpLine = help.padEnd(cols).slice(0, cols);
   lines.push(" " + helpLine);
 
   // ── Assemble ──
   const output = hideCursor() + cursorTo(1, 1) + "\n" + lines.join("\n");
   return output;
-}
-
-// ─── Overlay: pipeline spec ───
-
-function renderSpecOverlay(cols: number, rows: number): string {
-  const spec = PIPELINE_SPEC.trim();
-  const specLines = spec.split("\n");
-
-  // Calculate overlay dimensions
-  const overlayW = Math.min(cols - 4, 80);
-  const overlayH = Math.min(rows - 4, specLines.length + 8);
-  const startRow = Math.floor((rows - overlayH) / 2);
-  const startCol = Math.floor((cols - overlayW) / 2);
-
-  const output: string[] = [];
-
-  // Push cursor to overlay position
-  output.push(cursorTo(startRow, startCol));
-
-  // Top border
-  output.push(pc.cyan(boxTop(overlayW)));
-
-  // Welcome header
-  const welcome = pc.bold(pc.green(" ⚡ loopi — Local Autonomous Improvement Agent "));
-  output.push(pc.cyan(BORDER_V) + welcome.padEnd(overlayW - 2).slice(0, overlayW - 2) + pc.cyan(BORDER_V));
-
-  output.push(pc.cyan(BORDER_V) + " This dashboard monitors the pipeline. The pi agent   " + pc.cyan(BORDER_V));
-  output.push(pc.cyan(BORDER_V) + " runs the steps below via subagent() calls.          " + pc.cyan(BORDER_V));
-
-  // Divider
-  output.push(pc.cyan(BORDER_LT) + repeat(pc.cyan(BORDER_H), overlayW - 2) + pc.cyan(BORDER_RT));
-
-  // Title
-  const title = pc.bold(" PIPELINE SPECIFICATION ");
-  output.push(pc.cyan(BORDER_V) + title.padEnd(overlayW - 2).slice(0, overlayW - 2) + pc.cyan(BORDER_V));
-
-  // Divider
-  output.push(pc.cyan(BORDER_LT) + repeat(pc.cyan(BORDER_H), overlayW - 2) + pc.cyan(BORDER_RT));
-
-  // Content (scrollable — show what fits)
-  const contentH = overlayH - 4;
-  const visible = specLines.slice(0, contentH);
-  for (const line of visible) {
-    const truncated = line.length > overlayW - 4 ? line.slice(0, overlayW - 4) + "…" : line;
-    output.push(pc.cyan(BORDER_V) + " " + pc.dim(truncated).padEnd(overlayW - 3).slice(0, overlayW - 3) + pc.cyan(BORDER_V));
-  }
-
-  // Fill remaining
-  for (let i = visible.length; i < contentH; i++) {
-    output.push(pc.cyan(BORDER_V) + repeat(" ", overlayW - 2) + pc.cyan(BORDER_V));
-  }
-
-  // Bottom border
-  output.push(pc.cyan(boxBot(overlayW)));
-
-  // Status summary line below the box
-  const summary = buildSummaryLine();
-  output.push(cursorTo(startRow + overlayH, startCol) + " " + summary);
-
-  // Dismiss hint
-  output.push(cursorTo(startRow + overlayH + 1, startCol) + pc.dim(" Press any key to close this screen and open the dashboard "));
-
-  return hideCursor() + clearScreen() + output.join("\n");
 }
 
 /**
@@ -467,7 +437,7 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   let running = true;
   let autoRefresh = true;
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
-  let showingSpec = true; // Welcome: show pipeline spec on first open
+  let pipelineStarted = false;
 
   function getDimensions() {
     return { cols: stdout.columns ?? 80, rows: stdout.rows ?? 24 };
@@ -476,11 +446,6 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   function refresh() {
     if (!running) return;
     const { cols, rows } = getDimensions();
-
-    if (showingSpec) {
-      stdout.write(renderSpecOverlay(cols, rows));
-      return;
-    }
 
     const layout = computeLayout(rows, cols);
     const state = collectState(layout);
@@ -503,18 +468,6 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   // Handle keyboard input
   function onData(data: string) {
     const char = data.toLowerCase();
-
-    // If showing spec overlay, any key dismisses it and starts the pipeline
-    if (showingSpec) {
-      showingSpec = false;
-      startAutoRefresh();
-      // Auto-start the pipeline in background
-      import("../pipeline-runner.js").then(({ runAutoPipeline }) => {
-        runAutoPipeline().catch(() => {});
-      });
-      refresh();
-      return;
-    }
 
     if (data === "\u0003" || char === "q") {
       // Ctrl+C or q
@@ -539,19 +492,21 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
       return;
     }
 
-    if (data === "?") {
-      showingSpec = true;
-      stopAutoRefresh();
-      refresh();
-      return;
-    }
-
     if (char === "a") {
       if (onAction) {
         onAction({ type: "approve" });
       } else {
-        approvePending(".").then((ok) => {
-          if (ok) logger.info("Patch approved and merged.");
+        // Approve the latest feature branch, fallback to pending patch
+        getActiveFeatureBranches(".").then((branches) => {
+          if (branches.length > 0) {
+            approveFeatureBranch(branches[0]!, ".").then((ok) => {
+              if (ok) logger.info(`Approved: merged ${branches[0]} into dev`);
+            });
+          } else {
+            approvePending(".").then((ok) => {
+              if (ok) logger.info("Patch approved and merged.");
+            });
+          }
         });
       }
       refresh();
@@ -562,8 +517,17 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
       if (onAction) {
         onAction({ type: "reject" });
       } else {
-        rejectPending().then((ok) => {
-          if (ok) logger.info("Patch rejected.");
+        // Reject the latest feature branch, fallback to pending patch
+        getActiveFeatureBranches(".").then((branches) => {
+          if (branches.length > 0) {
+            rejectFeatureBranch(branches[0]!, ".").then((ok) => {
+              if (ok) logger.info(`Rejected: deleted ${branches[0]}`);
+            });
+          } else {
+            rejectPending().then((ok) => {
+              if (ok) logger.info("Patch rejected.");
+            });
+          }
         });
       }
       refresh();
@@ -596,7 +560,13 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
 
   // Render initial state
   refresh();
+
+  // Auto-start the pipeline immediately (no keypress needed)
+  pipelineStarted = true;
   startAutoRefresh();
+  import("../pipeline-runner.js").then(({ runAutoPipeline }) => {
+    runAutoPipeline().catch(() => {});
+  });
 
   // Wait for quit
   while (running) {
