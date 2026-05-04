@@ -24,7 +24,10 @@ export const VisionSchema = z.object({
   projectDescription: z.string().min(1),
   businessGoals: z.array(z.string()).min(1),
   technicalPriorities: z.array(z.string()).default([]),
-  userPersonas: z.array(z.string()).default([]),
+  userPersonas: z.array(z.union([
+    z.string(),
+    z.object({ name: z.string(), description: z.string().optional() })
+  ])).default([]),
   competitiveContext: z.string().optional(),
   revenueModel: z.string().optional(),
   constraints: z.array(z.string()).default([]),
