@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync, statSync } from "fs";
+import { readFileSync, existsSync, readdirSync } from "fs";
 import { resolve } from "path";
 import { homedir } from "os";
 import { loadConfig } from "./config.js";

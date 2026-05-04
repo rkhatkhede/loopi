@@ -80,7 +80,7 @@ async function main() {
     case "reject":
     case "--reject": {
       logger.info("Rejecting latest pending patch...");
-      const ok = rejectPending();
+      const ok = await rejectPending();
       if (!ok && listPending().length === 0) {
         // No pending patches is a clean state, not an error
         exit(0);
@@ -159,7 +159,7 @@ function showHelp(): void {
     pnpx @loopi-cli/loopi promote
     pnpx @loopi-cli/loopi run
 
-  Learn more: https://github.com/your-org/loopi
+  Learn more: https://github.com/rkhatkhede/loopi
   `);
 }
 

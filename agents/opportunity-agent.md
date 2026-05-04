@@ -29,7 +29,7 @@ Return a JSON object inside a fenced code block:
       "createdAt": 1234567890000,
       "title": "Short title",
       "description": "Detailed description of the opportunity",
-      "category": "feature | refactor | fix | test | optimize | docs",
+      "category": "feature | revenue | growth | tech-debt | security | performance | quality | docs | architecture",
       "estimatedValue": "low | medium | high",
       "estimatedEffort": "small | medium | large",
       "affectedAreas": ["src/"],

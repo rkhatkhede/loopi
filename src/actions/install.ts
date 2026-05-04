@@ -11,9 +11,8 @@ import { homedir } from "os";
  */
 export function installAgents(): number {
   // Resolve bundled agents directory
-  // __dirname = <package>/dist/ or <package>/src/actions/
-  // In dev (ts-node): __dirname may be src/actions/
-  // In production (compiled): __dirname = dist/actions/ or dist/
+  // __dirname = <package>/dist/actions/
+  // Resolve ../../agents to find the bundled agent .md files
   const possibleDirs = [
     resolve(dirname(fileURLToPath(import.meta.url)), "../../agents"),
     resolve(dirname(fileURLToPath(import.meta.url)), "../agents"),

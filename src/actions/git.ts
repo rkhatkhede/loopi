@@ -1,20 +1,24 @@
 import simpleGitPkg from "simple-git";
 import type { SimpleGit, SimpleGitFactory } from "simple-git";
 
+// simple-git is CJS-only; this double-cast bridges ESM import to CJS default export.
+// Once simple-git ships native ESM, replace with: import simpleGit from "simple-git";
 const simpleGit: SimpleGitFactory = (simpleGitPkg as unknown as SimpleGitFactory);
 import { existsSync } from "fs";
 import { resolve } from "path";
 import { logger } from "./logger.js";
 
 let _git: SimpleGit | null = null;
+let _gitCwd: string | null = null;
 
 export function getGit(cwd?: string): SimpleGit {
-  if (!_git) {
-    const dir = cwd ?? process.cwd();
+  const dir = cwd ?? process.cwd();
+  if (!_git || _gitCwd !== dir) {
     if (!existsSync(resolve(dir, ".git"))) {
       throw new Error("Not a git repository. Run `git init` first.");
     }
     _git = simpleGit(dir);
+    _gitCwd = dir;
   }
   return _git;
 }
@@ -22,6 +26,7 @@ export function getGit(cwd?: string): SimpleGit {
 /** Reset the cached git instance (e.g. after cwd change) */
 export function resetGit(): void {
   _git = null;
+  _gitCwd = null;
 }
 
 export async function getCurrentBranch(): Promise<string> {
@@ -52,7 +57,7 @@ export async function mergeBranch(sourceBranch: string, message?: string): Promi
   const git = getGit();
   const target = await getCurrentBranch();
   const msg = message ?? `Merge ${sourceBranch} into ${target}`;
-  await git.raw(["merge", "--ff-only", "-m", msg, sourceBranch]);
+  await git.raw(["merge", "--no-ff", "-m", msg, sourceBranch]);
   logger.info(`Merged ${sourceBranch} → ${target}`);
 }
 
@@ -60,25 +65,6 @@ export async function deleteBranch(branchName: string): Promise<void> {
   const git = getGit();
   await git.branch(["-d", branchName]);
   logger.info(`Deleted branch: ${branchName}`);
-}
-
-export async function stashChanges(): Promise<boolean> {
-  const git = getGit();
-  const status = await git.status();
-  if (status.files.length === 0) return false;
-  await git.stash();
-  logger.info("Stashed uncommitted changes");
-  return true;
-}
-
-export async function stashPop(): Promise<void> {
-  const git = getGit();
-  try {
-    await git.stash(["pop"]);
-    logger.info("Restored stashed changes");
-  } catch {
-    // No stash to pop — fine
-  }
 }
 
 export async function getModifiedFiles(): Promise<string[]> {

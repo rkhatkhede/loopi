@@ -42,7 +42,7 @@ describe("config", () => {
       JSON.stringify({
         projectName: "my-project",
         runFrequencyMinutes: 60,
-        humanGate: { enabled: true, requireApproval: true, notificationMethod: "contact_supervisor" },
+        humanGate: { enabled: true, timeoutMinutes: 30, autoRejectOnTimeout: false },
         constraints: { maxFilesPerPatch: 5, maxPatchSizeLines: 1000, maxPatchSizeBytes: 20480 },
       }),
       "utf-8"

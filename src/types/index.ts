@@ -158,9 +158,8 @@ export const ImprovementPlanSchema = z.object({
   steps: z.array(z.string()).default([]),
 
   /**
-   * For the patch-agent: the actual new content of each
-   * affected file (or the instruction to produce it).
-   * The pipeline passes this to generateDiffString().
+   * Optional: the actual new content of each affected file.
+   * If provided, passes this to the patch-agent for diff generation.
    */
   fileContents: z.record(z.string()).optional(),
 });
@@ -224,8 +223,8 @@ export const DEFAULT_CONFIG: Config = {
   },
   runFrequencyMinutes: 30,
   git: {
-    commitPrefix: "feat(agent):",
-    branchPrefix: "agent-improvement/",
+    commitPrefix: "feat(loopi):",
+    branchPrefix: "loopi/",
     autoPush: false,
   },
 };
@@ -272,8 +271,8 @@ export const ConfigSchema = z.object({
   runFrequencyMinutes: z.number().int().positive().default(30),
   git: z
     .object({
-      commitPrefix: z.string().default("feat(agent):"),
-      branchPrefix: z.string().default("agent-improvement/"),
+      commitPrefix: z.string().default("feat(loopi):"),
+      branchPrefix: z.string().default("loopi/"),
       autoPush: z.boolean().default(false),
     })
     .default({}),

@@ -6,7 +6,7 @@
  *
  * A pi agent has access to:
  *   - subagent()   — call specialized agents
- *   - bash         — run shell commands (ts-node, git, etc.)
+ *   - bash         — run shell commands (node, git, etc.)
  *   - read/write/edit — file operations
  *   - grep/find/ls — code exploration
  *
@@ -24,7 +24,7 @@
  * 10. [docs]  docs-agent      — Sync documentation
  *
  * Each step uses subagent() for intelligence and
- * ts-node to run the utility functions in this file.
+ * node to run the utility functions in this file (from dist/).
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
@@ -55,10 +55,8 @@ import {
 
 import { logger } from "./actions/logger.js";
 import { getConfig } from "./actions/config.js";
-import { getGit, applyDiff, createCommit, createBranch, ensureBranch, mergeBranch, deleteBranch, stashChanges, stashPop, getCurrentBranch, checkoutBranch } from "./actions/git.js";
+import { getGit, applyDiff, createCommit, createBranch, ensureBranch, mergeBranch, deleteBranch, getCurrentBranch, checkoutBranch, hasUncommittedChanges } from "./actions/git.js";
 import { writePendingPR, moveToApproved, listPending } from "./actions/pr.js";
-
-export { generateDiffString } from "./workers/patch-generator.js";
 
 // ──────────────────────────────────────────────
 // Agent output parser — runtime Zod validation
@@ -147,8 +145,39 @@ export function parseAgentData<T>(
 }
 
 // ──────────────────────────────────────────────
+// Concurrency lock (file-based)                  
+// ──────────────────────────────────────────────
+
+const LOCK_PATH = resolve(process.cwd(), ".pi/loopi/.pipeline.lock");
+
+/**
+ * Acquire a pipeline lock. Throws if another pipeline is running.
+ */
+export function acquireLock(): void {
+  if (existsSync(LOCK_PATH)) {
+    const pid = readFileSync(LOCK_PATH, "utf-8").trim();
+    throw new Error(
+      `Pipeline lock held by pid=${pid} at ${LOCK_PATH}. ` +
+      `If no other pipeline is running, delete the lock file and retry.`
+    );
+  }
+  writeFileSync(LOCK_PATH, String(process.pid), "utf-8");
+}
+
+/**
+ * Release the pipeline lock.
+ */
+export function releaseLock(): void {
+  try {
+    unlinkSync(LOCK_PATH);
+  } catch {
+    /* already gone — fine */
+  }
+}
+
+// ──────────────────────────────────────────────
 // Mechanical utility functions
-// (Called by the pi agent via: bash ts-node ... )
+// (Called by the pi agent via: bash node dist/... )
 // ──────────────────────────────────────────────
 
 /**
@@ -217,30 +246,15 @@ export function saveOpportunity(opportunity: Opportunity): void {
 }
 
 /**
- * Generate a unified diff from original content and new content.
- */
-export async function generatePatchDiff(
-  files: Array<{ path: string; original: string; modified: string }>
-): Promise<string> {
-  const { generateDiffString } = await import("./workers/patch-generator.js");
-  const diffs: string[] = [];
-  for (const f of files) {
-    diffs.push(generateDiffString(f.path, f.modified));
-  }
-  return diffs.join("\n");
-}
-
-/**
  * Apply a patch using the dev-branch workflow:
  *
- *   1. Stash uncommitted changes
+ *   1. Check for uncommitted changes — fail early if dirty
  *   2. Checkout/ensure dev branch (created from main if not exists)
  *   3. Create feature branch from dev: loopi/<summary>-<timestamp>
  *   4. Apply the diff to the feature branch
  *   5. Commit to the feature branch
  *   6. Checkout dev, merge feature branch (--no-ff)
  *   7. Delete feature branch
- *   8. Restore stashed changes
  *
  * Returns the feature branch name.
  */
@@ -257,8 +271,14 @@ export async function applyPatch(
   const diffPath = resolve(diffDir, ".loopi-current.diff");
   writeFileSync(diffPath, diff.replace(/\r/g, ""), "utf-8");
 
-  // Stash any uncommitted changes
-  const hadStash = await stashChanges();
+  // Acquire pipeline lock (prevents concurrent runs)
+  acquireLock();
+
+  // Fail early if working tree is dirty
+  if (await hasUncommittedChanges()) {
+    releaseLock();
+    throw new Error("Working tree has uncommitted changes. Commit or stash them first.");
+  }
 
   try {
     // Determine which branch to use as base
@@ -289,13 +309,25 @@ export async function applyPatch(
     // Pull latest dev if remote exists
     try {
       await git.pull("origin", baseBranch);
-    } catch {
-      // No remote configured — fine
+    } catch (pullErr) {
+      // No remote or merge conflict — log and continue
+      const msg = pullErr instanceof Error ? pullErr.message : String(pullErr);
+      if (msg.includes("couldn't find remote") || msg.includes("No remote")) {
+        logger.info("No remote configured, skipping pull");
+      } else if (msg.includes("merge")) {
+        // Abort any in-progress merge so the working tree is clean
+        logger.warn(`Pull merge conflict — aborting merge: ${msg}`);
+        await git.raw(["merge", "--abort"]).catch(() => {});
+        throw new Error(`git pull conflict on ${baseBranch}: ${msg}`);
+      } else {
+        logger.warn(`git pull skipped: ${msg}`);
+      }
     }
 
     // Create feature branch from dev
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const branchName = `loopi/${summary
+    const cfg = getConfig();
+    const branchName = `${cfg.git.branchPrefix}${summary
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
@@ -307,11 +339,11 @@ export async function applyPatch(
     await applyDiff(diffPath);
 
     // Commit
-    await createCommit(`feat(loopi): ${summary}`);
+    await createCommit(`${cfg.git.commitPrefix} ${summary}`);
 
     // Switch back to dev and merge
     await checkoutBranch(baseBranch);
-    await mergeBranch(branchName, `feat(loopi): merge ${summary}`);
+    await mergeBranch(branchName, `${cfg.git.commitPrefix} merge ${summary}`);
 
     // Clean up feature branch
     await deleteBranch(branchName);
@@ -319,8 +351,8 @@ export async function applyPatch(
     logger.info(`Applied ${summary} → ${baseBranch} via ${branchName}`);
     return branchName;
   } finally {
-    // Restore stashed changes
-    if (hadStash) await stashPop();
+    // Release lock
+    releaseLock();
 
     // Clean up temp diff file
     try {
@@ -376,7 +408,7 @@ export async function approvePending(targetRoot = "."): Promise<boolean> {
 /**
  * Reject the latest pending patch — delete it.
  */
-export function rejectPending(): boolean {
+export async function rejectPending(): Promise<boolean> {
   const latest = getLatestPending();
   if (!latest) {
     logger.info("No pending patches to reject.");
@@ -384,7 +416,8 @@ export function rejectPending(): boolean {
   }
   const path = resolve(process.cwd(), ".pi/loopi/workflows/pending", latest);
   try {
-    unlinkSync(path);
+    const { unlink } = await import("fs/promises");
+    await unlink(path);
     logger.info(`Rejected: ${latest}`);
     return true;
   } catch (err) {
@@ -402,8 +435,15 @@ export async function promoteToMain(targetRoot = "."): Promise<boolean> {
   const git = getGit(targetRoot);
   const currentBranch = await getCurrentBranch();
 
-  // Stash any uncommitted changes
-  const hadStash = await stashChanges();
+  // Acquire pipeline lock (prevents concurrent runs)
+  acquireLock();
+
+  // Fail early if working tree is dirty
+  if (await hasUncommittedChanges()) {
+    releaseLock();
+    logger.error("Working tree has uncommitted changes. Commit or stash them first.");
+    return false;
+  }
 
   try {
     // Check dev exists
@@ -441,7 +481,7 @@ export async function promoteToMain(targetRoot = "."): Promise<boolean> {
     logger.info("Promoted dev → main successfully");
     return true;
   } finally {
-    if (hadStash) await stashPop();
+    releaseLock();
   }
 }
 
@@ -450,11 +490,16 @@ export async function promoteToMain(targetRoot = "."): Promise<boolean> {
 //
 // The pi agent reads this and executes each step
 // using subagent() for intelligence and
-// bash + ts-node for mechanical operations.
+// bash + node for mechanical operations.
 // ──────────────────────────────────────────────
 
 export const PIPELINE_SPEC = `
 # loopi Pipeline Specification
+
+> 🔁 **Error handling:** If any subagent call or validation step fails,
+> retry up to 2 times with a brief delay (5s) before aborting the cycle.
+> Use parseAgentOutput / parseAgentData for runtime validation.
+> If validation fails after retries, log the error and exit gracefully.
 
 ## Step 1: Ensure Vision
 - If .pi/loopi/vision.json doesn't exist, run:
@@ -481,11 +526,8 @@ export const PIPELINE_SPEC = `
 - Validate the output with: parseAgentData(output, ImprovementPlanSchema, "plan")
 
 ## Step 6: Generate Patch
-- If the plan includes fileContents, generate the diff using:
-  bash: ts-node --eval "import { generateDiffString } from './src/workers/patch-generator.js'; console.log(generateDiffString(...))"
-- Otherwise, run: subagent({ agent: "${AGENTS.PATCH}", task: JSON.stringify({ plan }) })
+- Run: subagent({ agent: "${AGENTS.PATCH}", task: JSON.stringify({ plan }) })
 - Validate patch output with: parseAgentData(output, PatchSchema, "patch")
-- Generate the unified diff from the patch-agent's fileContents.
 
 ## Step 7: Review
 - Run: subagent({ agent: "${AGENTS.REVIEWER}", task: JSON.stringify({ plan, diff, originalFiles }) })

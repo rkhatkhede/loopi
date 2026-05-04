@@ -137,7 +137,6 @@ src/
 ├── actions/         → Git, config, logger, PR workflow, install, init
 ├── tui/             → TUI dashboard
 ├── types/           → Zod schemas for runtime validation
-└── workers/         → Mechanical helpers (patch generation)
 tests/               → Vitest test suite
 .pi/loopi/           → Per-repo state (auto-created by `loopi init`)
   ├── config.json

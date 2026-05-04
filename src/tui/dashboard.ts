@@ -14,7 +14,7 @@
  *   R (shift) — Reject latest pending patch
  *   s        — Show detailed status (runs status.ts inline)
  */
-import { readFileSync, readdirSync, existsSync, statSync } from "fs";
+import { readFileSync, readdirSync, existsSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "../actions/config.js";
 import { listPending, listApproved } from "../actions/pr.js";
@@ -65,7 +65,7 @@ function computeLayout(rows: number, cols: number): Layout {
   const leftW = Math.floor(cols / 2);
   const rightW = cols - leftW;
   const panelH = Math.floor(bodyH / 3) * 2; // top panels take 2/3
-  const logH = bodyH - panelH;
+  const logH = Math.max(bodyH - panelH, 1);
 
   return {
     cols,
@@ -373,7 +373,7 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
       return;
     }
 
-    if (char === "r" && data === "r") {
+    if (data === "r") {
       refresh();
       return;
     }
@@ -443,7 +443,7 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
 
 // ─── Direct execution support ───
 
-const isMain = process.argv[1]?.endsWith("dashboard.ts") || process.argv[1]?.endsWith("dashboard.js");
+const isMain = process.argv[1] && (process.argv[1].endsWith("dashboard.ts") || process.argv[1].endsWith("dashboard.js"));
 if (isMain) {
   runDashboard().catch((err) => {
     console.error(pc.red("Dashboard error:"), err);

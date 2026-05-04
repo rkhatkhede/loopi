@@ -88,9 +88,7 @@ export function readDiffFile(filename: string): { content: string; metadata: Rec
     ? resolve(_approvedDir, filename)
     : existsSync(resolve(_pendingDir, filename))
       ? resolve(_pendingDir, filename)
-      : existsSync(resolve(_approvedDir, filename))
-        ? resolve(_approvedDir, filename)
-        : null;
+      : null;
 
   if (!filepath) return null;
 
