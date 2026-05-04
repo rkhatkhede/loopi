@@ -31,3 +31,25 @@ Return a JSON object inside a fenced code block:
 ```
 
 **Validation**: Your output will be parsed with `parseAgentData(output, z.object({ filesUpdated: z.array(z.string()), summary: z.string() }), "docs")`.
+
+### After a Successful Patch
+
+Also append a pattern record so future cycles can learn from what worked:
+
+```bash
+node -e "
+const { savePattern, readPatterns } = require('./dist/pipeline.js');
+savePattern({
+  id: require('crypto').randomUUID(),
+  createdAt: Date.now(),
+  category: '<opportunity-category>',
+  summary: '<one-line summary of what was done>',
+  filesChanged: ['<path1>', '<path2>'],
+  patchSize: <number-of-lines-in-diff>,
+  outcome: 'approved',
+  tags: ['<tag1>', '<tag2>']
+});
+"
+```
+
+Use tags like: `refactor`, `fix`, `typing`, `performance`, `security`, `test-coverage`, `docs`, `deduplication`, `eslint`, `error-handling`. Be specific — tags are how the opportunity agent finds relevant patterns later.

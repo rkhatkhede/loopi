@@ -196,6 +196,32 @@ export const ReviewResultSchema = z.object({
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;
 
 // ──────────────────────────────────────────────
+// Pattern (lightweight cross-session memory)
+// ──────────────────────────────────────────────
+
+export const PatternSchema = z.object({
+  id: z.string(),
+  createdAt: z.number().int().positive(),
+  category: z.enum([
+    "feature",
+    "revenue",
+    "growth",
+    "tech-debt",
+    "security",
+    "performance",
+    "quality",
+    "docs",
+    "architecture",
+  ]),
+  summary: z.string().min(1).max(200),
+  filesChanged: z.array(z.string()),
+  patchSize: z.number().int().nonnegative(),
+  outcome: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+});
+export type Pattern = z.infer<typeof PatternSchema>;
+
+// ──────────────────────────────────────────────
 // Default config (embedded, no file required)
 // ──────────────────────────────────────────────
 
