@@ -36,6 +36,21 @@ export const VisionSchema = z.object({
    * with the vision.
    */
   northStar: z.string().optional(),
+
+  /**
+   * Milestone checkpoints toward the north star.
+   * Agents use these to track progress across cycles.
+   */
+  milestones: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().optional(),
+        status: z.enum(["pending", "in_progress", "completed"]).default("pending"),
+        completedAt: z.string().datetime({ offset: true }).optional(),
+      })
+    )
+    .default([]),
 });
 export type VisionDocument = z.infer<typeof VisionSchema>;
 

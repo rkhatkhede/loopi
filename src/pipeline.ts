@@ -524,10 +524,13 @@ export async function promoteToMain(targetRoot = "."): Promise<boolean> {
 export const PIPELINE_SPEC = `
 # loopi Pipeline Specification
 
-> 🔁 **Error handling:** If any subagent call or validation step fails,
-> retry up to 2 times with a brief delay (5s) before aborting the cycle.
-> Use parseAgentOutput / parseAgentData for runtime validation.
-> If validation fails after retries, log the error and exit gracefully.
+> 🔁 **Retry strategy (use for every step):**
+>   1st failure → wait 2s, retry
+>   2nd failure → wait 5s, retry
+>   3rd failure → wait 10s, retry
+>   4th failure → abort cycle with error message
+>   Use parseAgentOutput / parseAgentData for runtime validation.
+>   If validation fails after retries, log the error and exit gracefully.
 
 ## Step 1: Ensure Vision
 - If .pi/loopi/vision.json doesn't exist, run:

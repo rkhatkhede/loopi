@@ -34,7 +34,24 @@ Return a JSON object inside a fenced code block:
 
 ### After a Successful Patch
 
-Also append a pattern record so future cycles can learn from what worked:
+**1. Update milestones** — If the patch progresses toward a vision milestone, mark it as in_progress or completed:
+
+```bash
+node -e "
+const { readVision, saveVision } = require('./dist/pipeline.js');
+const vision = readVision();
+if (vision) {
+  const milestones = vision.milestones || [];
+  const milestone = milestones.find(m => /* match by name/description */ false);
+  if (milestone) {
+    milestone.status = 'in_progress';
+    saveVision(vision);
+  }
+}
+"
+```
+
+**2. Append a pattern record** so future cycles can learn from what worked:
 
 ```bash
 node -e "

@@ -19,10 +19,11 @@ import { existsSync } from "fs";
 import { resolve } from "path";
 import { logger } from "./actions/logger.js";
 import { loadConfig } from "./actions/config.js";
-import { PIPELINE_SPEC } from "./pipeline.js";
+import { PIPELINE_SPEC, readVision, readPatterns } from "./pipeline.js";
 import { runDashboard } from "./tui/dashboard.js";
 import { installAgents } from "./actions/install.js";
 import { initProject } from "./actions/init.js";
+import { listPending } from "./actions/pr.js";
 import pc from "picocolors";
 
 async function main() {
@@ -39,6 +40,7 @@ async function main() {
     case "dashboard":
     case "tui":
     case "--dashboard": {
+      console.log(pc.dim("Loading dashboard..."));
       await runDashboard();
       exit(0);
     }
@@ -76,7 +78,55 @@ function runDefault(): void {
     exit(1);
   }
 
+  // Show a quick status summary
+  console.log(summaryLine());
+
   console.log(RUN_PROMPT);
+}
+
+function summaryLine(): string {
+  const parts: string[] = [];
+
+  // Vision
+  const vision = readVision();
+  if (vision) {
+    const total = vision.milestones?.length ?? 0;
+    const done = vision.milestones?.filter((m) => m.status === "completed").length ?? 0;
+    if (total > 0) {
+      parts.push(pc.green(`✓ milestones ${done}/${total}`));
+    } else {
+      parts.push(pc.green("✓ vision set"));
+    }
+  } else {
+    parts.push(pc.yellow("○ no vision yet"));
+  }
+
+  // Pending patches
+  const pending = listPending();
+  if (pending.length > 0) {
+    parts.push(pc.yellow(`⚠ ${pending.length} patch${pending.length > 1 ? "es" : ""} pending (dashboard)`));
+  } else {
+    parts.push(pc.dim("○ no pending patches"));
+  }
+
+  // Past patterns
+  const patterns = readPatterns();
+  if (patterns.length > 0) {
+    const last = patterns[patterns.length - 1]!;
+    const ago = msAgo(last.createdAt);
+    parts.push(pc.dim(`◈ ${patterns.length} pattern${patterns.length > 1 ? "s" : ""}, latest ${ago}`));
+  }
+
+  return parts.join(pc.dim(" · "));
+}
+
+function msAgo(ts: number): string {
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ago`;
 }
 
 // ──────────────────────────────────────────────
@@ -132,6 +182,10 @@ ${PIPELINE_SPEC}
 `;
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(pc.red(`\n✖ ${msg}`));
+  if (process.env.DEBUG) {
+    console.error(pc.dim(err instanceof Error ? err.stack ?? "" : ""));
+  }
   exit(1);
 });
