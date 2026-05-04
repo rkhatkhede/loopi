@@ -5,13 +5,13 @@
 loopi is available as an npm package. Run it in any repository:
 
 ```bash
-npx loopi-cli init       # Initialize loopi in the current repo
-npx loopi-cli run        # Print pipeline spec for pi agent to execute
-npx loopi-cli status     # Show current system state
-npx loopi-cli dashboard  # Open the live TUI dashboard
-npx loopi-cli approve    # Apply the latest pending diff (merges into dev)
-npx loopi-cli reject     # Discard the latest pending diff
-npx loopi-cli promote    # Merge dev → main (end of session)
+npx @loopi-cli/loopi init       # Initialize loopi in the current repo
+npx @loopi-cli/loopi run        # Print pipeline spec for pi agent to execute
+npx @loopi-cli/loopi status     # Show current system state
+npx @loopi-cli/loopi dashboard  # Open the live TUI dashboard
+npx @loopi-cli/loopi approve    # Apply the latest pending diff (merges into dev)
+npx @loopi-cli/loopi reject     # Discard the latest pending diff
+npx @loopi-cli/loopi promote    # Merge dev → main (end of session)
 ```
 
 ## Architecture
@@ -67,7 +67,7 @@ main ─── A ── B ── B'  (promote → main when session is done)
 ```
 
 - All approved patches merge into `dev` via ephemeral feature branches
-- `loopi-cli promote` merges `dev → main` to finalize a session
+- `loopi promote` merges `dev → main` to finalize a session
 - `main` stays clean until explicitly promoted
 
 ## How It Works
@@ -84,13 +84,13 @@ The pipeline runs inside your pi coding assistant. The pi agent reads
 
 ```bash
 # Install globally (one time)
-npm install -g loopi-cli
+npm install -g @loopi-cli/loopi
 
 # Or run without installing (npx auto-downloads)
 cd your-project
-npx loopi-cli init       # Creates .pi/loopi/ + installs agents globally
-npx loopi-cli status     # Check everything is set up
-npx loopi-cli dashboard  # Open the live dashboard
+npx @loopi-cli/loopi init       # Creates .pi/loopi/ + installs agents globally
+npx @loopi-cli/loopi status     # Check everything is set up
+npx @loopi-cli/loopi dashboard  # Open the live dashboard
 ```
 
 ## Configuration
