@@ -1,74 +1,56 @@
 /**
  * loopi — Autonomous Pipeline Runner
  *
- * Runs the improvement pipeline directly from the Node.js process
- * without requiring a pi agent. Handles basic code scanning,
- * opportunity detection, and patch generation.
- *
- * Logs progress to .pi/loopi/logs/ which the TUI dashboard picks up.
+ * Executes steps asynchronously with event-loop yields so the
+ * TUI dashboard can render between steps. Stops early when a
+ * step produces no useful output.
  */
 
-import { execSync } from "child_process";
-import { readFileSync, existsSync, readdirSync, appendFileSync, mkdirSync } from "fs";
+import { exec } from "child_process";
+import { existsSync, appendFileSync, mkdirSync } from "fs";
 import { resolve } from "path";
 import crypto from "crypto";
 import { logger } from "./actions/logger.js";
 import { readVision, saveVision, saveOpportunity, writePending } from "./pipeline.js";
 import type { Opportunity, Patch } from "./types/index.js";
 
-// ─── Finding types ───
-
-interface Finding {
-  file: string;
-  line?: number;
-  severity: "error" | "warning" | "info";
-  message: string;
-  rule?: string;
-  fixable?: boolean;
-}
-
-interface ScanResult {
-  findings: Finding[];
-  testFailures: string[];
-  todos: Finding[];
-}
-
 // ─── Helpers ───
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+function execAsync(cmd: string, opts: { cwd?: string; timeout?: number } = {}): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  return new Promise((resolve) => {
+    exec(cmd, { ...opts, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ stdout: stdout?.toString() || "", stderr: stderr?.toString() || "", code: err ? (err as any).code || 1 : 0 });
+    });
+  });
+}
 
 function log(msg: string) {
   logger.info(msg);
   const progressDir = resolve(process.cwd(), ".pi/loopi/logs");
   if (!existsSync(progressDir)) mkdirSync(progressDir, { recursive: true });
-  const logFile = resolve(progressDir, "pipeline.log");
-  appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`, "utf-8");
-}
-
-function estimateValue(count: number): "low" | "medium" | "high" | "critical" {
-  if (count > 50) return "critical";
-  if (count > 20) return "high";
-  if (count > 5) return "medium";
-  return "low";
-}
-
-function estimateEffort(count: number): "trivial" | "small" | "medium" | "large" | "epic" {
-  if (count > 50) return "epic";
-  if (count > 20) return "large";
-  if (count > 10) return "medium";
-  if (count > 3) return "small";
-  return "trivial";
+  appendFileSync(resolve(progressDir, "pipeline.log"), `[${new Date().toISOString()}] ${msg}\n`, "utf-8");
 }
 
 function uuid() {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  }
+  try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`; }
 }
 
-// ─── Step 1: Ensure vision ───
+function estimateValue(n: number): "low" | "medium" | "high" | "critical" {
+  return n > 50 ? "critical" : n > 20 ? "high" : n > 5 ? "medium" : "low";
+}
 
-function ensureVision() {
+function estimateEffort(n: number): "trivial" | "small" | "medium" | "large" | "epic" {
+  return n > 50 ? "epic" : n > 20 ? "large" : n > 10 ? "medium" : n > 3 ? "small" : "trivial";
+}
+
+interface Finding { file: string; line?: number; severity: "error" | "warning" | "info"; message: string; rule?: string; fixable?: boolean; }
+interface ScanResult { findings: Finding[]; testFailures: string[]; todos: Finding[]; }
+
+// ─── Step 1: Vision ───
+
+async function ensureVision() {
   log("Step 1/5: Checking vision...");
   let vision = readVision();
   if (!vision) {
@@ -76,234 +58,241 @@ function ensureVision() {
       version: 1,
       projectDescription: "Improve code quality, fix issues, and reduce technical debt.",
       businessGoals: ["Fix lint errors", "Fix failing tests", "Resolve TODOs", "Improve code quality"],
-      technicalPriorities: [],
-      userPersonas: [],
-      constraints: [],
-      northStar: "A clean, well-tested, maintainable codebase",
-      milestones: [],
+      technicalPriorities: [], userPersonas: [], constraints: [],
+      northStar: "A clean, well-tested, maintainable codebase", milestones: [],
     };
     saveVision(vision);
     log("  Vision created from defaults.");
-  } else {
-    log(`  Vision found.`);
-  }
+  } else log("  Vision found.");
+  await sleep(10);
   return vision;
 }
 
-// ─── Step 2: Scan code ───
+// ─── Step 2: Async code scan ───
 
-function scanCode(): ScanResult {
+async function scanCode(): Promise<ScanResult> {
   log("Step 2/5: Scanning codebase...");
   const findings: Finding[] = [];
   const testFailures: string[] = [];
   const todos: Finding[] = [];
+  const cwd = process.cwd();
 
-  // Lint
-  const eslintFiles = [".eslintrc", ".eslintrc.json", ".eslintrc.cjs", "eslint.config.js", "eslint.config.mjs"];
-  if (eslintFiles.some(f => existsSync(resolve(process.cwd(), f)))) {
+  // ── Lint ──
+  const eslintFiles = [".eslintrc", ".eslintrc.json", ".eslintrc.cjs", "eslint.config.js", "eslint.config.mjs", "eslint.config.ts"];
+  if (eslintFiles.some(f => existsSync(resolve(cwd, f)))) {
+    log("  Running eslint...");
+    const { stdout } = await execAsync("npx eslint . --format json 2>/dev/null", { cwd, timeout: 30_000 });
+    await sleep(10);
     try {
-      log("  Running eslint...");
-      const stdout = execSync("npx eslint . --format json 2>/dev/null", {
-        cwd: process.cwd(),
-        timeout: 30_000,
-        encoding: "utf-8",
-        maxBuffer: 1024 * 1024,
-      });
-      const results = JSON.parse(stdout);
-      for (const file of results) {
-        for (const msg of file.messages || []) {
-          findings.push({
-            file: file.filePath,
-            line: msg.line,
-            severity: msg.severity === 2 ? "error" : "warning",
-            message: msg.message,
-            rule: msg.ruleId,
-            fixable: !!msg.fix,
-          });
+      if (stdout.trim()) {
+        const results = JSON.parse(stdout);
+        for (const file of results) {
+          for (const msg of file.messages || []) {
+            findings.push({
+              file: file.filePath, line: msg.line,
+              severity: msg.severity === 2 ? "error" : "warning",
+              message: msg.message, rule: msg.ruleId, fixable: !!msg.fix,
+            });
+          }
         }
       }
-      log(`  Found ${findings.length} lint issue(s).`);
-    } catch {
-      log("  Lint check skipped.");
-    }
+    } catch { /* ignore parse errors */ }
+    log(findings.length ? `  Found ${findings.length} lint issue(s).` : "  Lint clean.");
   } else {
-    log("  No eslint config — skipping lint.");
+    // Try eslint detection without config file
+    const { stdout: pkgStr } = await execAsync("cat package.json 2>/dev/null || type package.json 2>/dev/null", { cwd });
+    await sleep(10);
+    const hasEslintDep = pkgStr.includes("eslint");
+    if (hasEslintDep) {
+      log("  eslint detected in package.json, running...");
+      const { stdout } = await execAsync("npx eslint . --format json 2>/dev/null", { cwd, timeout: 30_000 });
+      await sleep(10);
+      try {
+        if (stdout.trim()) {
+          const results = JSON.parse(stdout);
+          for (const file of results) {
+            for (const msg of file.messages || []) {
+              findings.push({
+                file: file.filePath, line: msg.line,
+                severity: msg.severity === 2 ? "error" : "warning",
+                message: msg.message, rule: msg.ruleId, fixable: !!msg.fix,
+              });
+            }
+          }
+        }
+      } catch { /* ignore */ }
+      log(findings.length ? `  Found ${findings.length} lint issue(s).` : "  Lint clean.");
+    } else {
+      log("  No eslint config or dep — skipping lint.");
+    }
   }
+  await sleep(10);
 
-  // Tests
-  const testCmd = existsSync(resolve(process.cwd(), "vitest.config.ts"))
-    ? "npx vitest run 2>&1"
-    : existsSync(resolve(process.cwd(), "jest.config.js"))
-      ? "npx jest 2>&1"
-      : null;
-  if (testCmd) {
-    try {
-      log("  Running tests...");
-      execSync(testCmd, { cwd: process.cwd(), timeout: 60_000, stdio: "pipe" });
-      log("  All tests pass.");
-    } catch (e: any) {
-      const out = e.stdout?.toString() || "";
-      const err = e.stderr?.toString() || "";
-      const lines = (out + "\n" + err).split("\n").filter(l => l.includes("FAIL") || l.includes("fail") || l.includes("Error"));
-      testFailures.push(...lines.slice(0, 10));
+  // ── Tests ──
+  const testCmds: { file: string; cmd: string }[] = [
+    { file: "vitest.config.ts", cmd: "npx vitest run 2>&1" },
+    { file: "vitest.config.js", cmd: "npx vitest run 2>&1" },
+    { file: "jest.config.js", cmd: "npx jest 2>&1" },
+    { file: "jest.config.ts", cmd: "npx jest 2>&1" },
+  ];
+  const matched = testCmds.find(t => existsSync(resolve(cwd, t.file)));
+  if (matched) {
+    log(`  Running tests (${matched.file})...`);
+    const { stdout, stderr } = await execAsync(matched.cmd, { cwd, timeout: 60_000 });
+    await sleep(10);
+    const combined = stdout + "\n" + stderr;
+    const failed = combined.split("\n").filter(l => l.includes("FAIL") || l.includes("✗") || l.includes("×"));
+    if (failed.length > 0) {
+      testFailures.push(...failed.slice(0, 10));
       log(`  Found ${testFailures.length} test failure(s).`);
-    }
+    } else log("  All tests pass.");
   } else {
-    log("  No test config — skipping tests.");
+    // Check package.json scripts for test
+    const { stdout: pkgStr2 } = await execAsync("cat package.json 2>/dev/null || type package.json 2>/dev/null", { cwd });
+    await sleep(10);
+    if (pkgStr2.includes('"test"')) {
+      log("  Running npm test...");
+      const { stdout: tout, stderr: terr } = await execAsync("npm test 2>&1", { cwd, timeout: 60_000 });
+      await sleep(10);
+      const combined = tout + "\n" + terr;
+      const failed = combined.split("\n").filter(l => l.includes("FAIL") || l.includes("✗") || l.includes("×"));
+      if (failed.length > 0) {
+        testFailures.push(...failed.slice(0, 10));
+        log(`  Found ${testFailures.length} test failure(s).`);
+      } else log("  All tests pass.");
+    } else log("  No test config — skipping tests.");
   }
+  await sleep(10);
 
-  // TODO/FIXME
-  try {
-    const srcDirs = ["src"].filter(d => existsSync(resolve(process.cwd(), d)));
+  // ── TODOs ──
+  const srcDirs = ["src", "lib", "app", "client", "server"].filter(d => existsSync(resolve(cwd, d)));
+  if (srcDirs.length > 0) {
     for (const dir of srcDirs) {
-      const out = execSync(
-        `npx grep -rn "TODO\\|FIXME\\|HACK\\|XXX" ${dir} --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" 2>/dev/null || true`,
-        { cwd: process.cwd(), timeout: 10_000, encoding: "utf-8", maxBuffer: 1024 * 1024 }
+      const ext = `--include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.py" --include="*.rs" --include="*.go"`;
+      const { stdout } = await execAsync(
+        `grep -rn "TODO\\|FIXME\\|HACK\\|XXX" ${dir} ${ext} 2>/dev/null || true`,
+        { cwd, timeout: 15_000 }
       );
-      for (const line of out.split("\n").filter(Boolean)) {
+      await sleep(10);
+      for (const line of stdout.split("\n").filter(Boolean)) {
         const parts = line.split(":");
         if (parts.length >= 3) {
-          todos.push({
-            file: parts[0]!,
-            line: parseInt(parts[1]!, 10),
-            severity: "info",
-            message: parts.slice(2).join(":").trim(),
-          });
+          const msg = parts.slice(2).join(":").trim();
+          if (msg.length > 0 && !msg.startsWith(":") && !msg.startsWith("//")) {
+            todos.push({ file: parts[0]!, line: parseInt(parts[1]!, 10), severity: "info", message: msg });
+          }
         }
       }
     }
-    log(`  Found ${todos.length} TODO/FIXME(s).`);
-  } catch {
-    log("  TODO scan skipped.");
-  }
+    log(todos.length ? `  Found ${todos.length} TODO/FIXME(s).` : "  No TODOs found.");
+  } else log("  No src/lib/app dir — skipping TODO scan.");
+  await sleep(10);
 
   return { findings, testFailures, todos };
 }
 
 // ─── Step 3: Create opportunities ───
 
-function createOpportunities(_vision: any, scan: ScanResult): Opportunity[] {
+async function createOpportunities(scan: ScanResult): Promise<Opportunity[]> {
   log("Step 3/5: Creating improvement opportunities...");
-  const opportunities: Opportunity[] = [];
+  const opps: Opportunity[] = [];
 
   const errors = scan.findings.filter(f => f.severity === "error");
-  if (errors.length > 0) {
-    opportunities.push({
-      id: uuid(),
-      createdAt: Date.now(),
-      title: `Fix ${errors.length} lint error(s)`,
-      description: errors.slice(0, 20).map(e => `${e.file}:${e.line} — ${e.message}`).join("\n"),
-      category: "quality",
-      estimatedValue: estimateValue(errors.length),
-      estimatedEffort: estimateEffort(errors.length),
-      affectedAreas: [...new Set(errors.map(e => e.file))].slice(0, 5),
-      status: "suggested",
-    });
-  }
+  if (errors.length > 0) opps.push({
+    id: uuid(), createdAt: Date.now(),
+    title: `Fix ${errors.length} lint error(s)`,
+    description: errors.slice(0, 20).map(e => `${e.file}:${e.line} — ${e.message}`).join("\n"),
+    category: "quality", estimatedValue: estimateValue(errors.length),
+    estimatedEffort: estimateEffort(errors.length),
+    affectedAreas: [...new Set(errors.map(e => e.file))].slice(0, 5), status: "suggested",
+  });
 
   const warnings = scan.findings.filter(f => f.severity === "warning");
-  if (warnings.length > 0) {
-    opportunities.push({
-      id: uuid(),
-      createdAt: Date.now(),
-      title: `Fix ${warnings.length} lint warning(s)`,
-      description: warnings.slice(0, 20).map(e => `${e.file}:${e.line} — ${e.message}`).join("\n"),
-      category: "quality",
-      estimatedValue: estimateValue(warnings.length),
-      estimatedEffort: estimateEffort(warnings.length),
-      affectedAreas: [...new Set(warnings.map(e => e.file))].slice(0, 5),
-      status: "suggested",
-    });
-  }
+  if (warnings.length > 0) opps.push({
+    id: uuid(), createdAt: Date.now(),
+    title: `Fix ${warnings.length} lint warning(s)`,
+    description: warnings.slice(0, 20).map(e => `${e.file}:${e.line} — ${e.message}`).join("\n"),
+    category: "quality", estimatedValue: estimateValue(warnings.length),
+    estimatedEffort: estimateEffort(warnings.length),
+    affectedAreas: [...new Set(warnings.map(e => e.file))].slice(0, 5), status: "suggested",
+  });
 
-  if (scan.testFailures.length > 0) {
-    opportunities.push({
-      id: uuid(),
-      createdAt: Date.now(),
-      title: `Fix ${scan.testFailures.length} failing test(s)`,
-      description: scan.testFailures.join("\n"),
-      category: "quality",
-      estimatedValue: "high",
-      estimatedEffort: estimateEffort(scan.testFailures.length),
-      affectedAreas: ["tests"],
-      status: "suggested",
-    });
-  }
+  if (scan.testFailures.length > 0) opps.push({
+    id: uuid(), createdAt: Date.now(),
+    title: `Fix ${scan.testFailures.length} failing test(s)`,
+    description: scan.testFailures.slice(0, 10).join("\n"),
+    category: "quality", estimatedValue: "high",
+    estimatedEffort: estimateEffort(scan.testFailures.length),
+    affectedAreas: ["tests"], status: "suggested",
+  });
 
-  if (scan.todos.length > 0) {
-    opportunities.push({
-      id: uuid(),
-      createdAt: Date.now(),
-      title: `Resolve ${scan.todos.length} TODO/FIXME(s)`,
-      description: scan.todos.slice(0, 20).map(t => `${t.file}:${t.line} — ${t.message}`).join("\n"),
-      category: "tech-debt",
-      estimatedValue: estimateValue(scan.todos.length),
-      estimatedEffort: estimateEffort(scan.todos.length),
-      affectedAreas: [...new Set(scan.todos.map(t => t.file))].slice(0, 5),
-      status: "suggested",
-    });
-  }
+  if (scan.todos.length > 0) opps.push({
+    id: uuid(), createdAt: Date.now(),
+    title: `Resolve ${scan.todos.length} TODO/FIXME(s)`,
+    description: scan.todos.slice(0, 20).map(t => `${t.file}:${t.line} — ${t.message}`).join("\n"),
+    category: "tech-debt", estimatedValue: estimateValue(scan.todos.length),
+    estimatedEffort: estimateEffort(scan.todos.length),
+    affectedAreas: [...new Set(scan.todos.map(t => t.file))].slice(0, 5), status: "suggested",
+  });
 
-  log(`  Created ${opportunities.length} opportunity/opportunities.`);
-  return opportunities;
+  log(`  Created ${opps.length} opportunity/opportunities.`);
+  await sleep(10);
+  return opps;
 }
 
 // ─── Step 4: Generate patches ───
 
-function generatePatches(opportunity: Opportunity): Patch[] {
+async function generatePatches(opportunity: Opportunity): Promise<Patch[]> {
   log(`Step 4/5: Generating patches for "${opportunity.title.slice(0, 50)}..."`);
   const patches: Patch[] = [];
+  const cwd = process.cwd();
 
   if (opportunity.title.includes("lint")) {
-    try {
-      log("  Running eslint --fix...");
-      execSync("npx eslint . --fix 2>&1", { cwd: process.cwd(), timeout: 60_000, encoding: "utf-8" });
-      log("  Eslint --fix done.");
+    const fixableCount = opportunity.description.includes(":") ? "running" : "attempting";
+    log(`  Running eslint --fix...`);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const fixable = fixableCount;
+    await execAsync("npx eslint . --fix 2>&1", { cwd, timeout: 60_000 });
+    await sleep(10);
+    log("  Eslint --fix done.");
 
-      try {
-        const diff = execSync("git diff 2>&1", { cwd: process.cwd(), timeout: 10_000, encoding: "utf-8" });
-        if (diff.trim()) {
-          const stat = execSync("git diff --stat 2>&1", { cwd: process.cwd(), timeout: 5_000, encoding: "utf-8" });
-          const filesChanged: string[] = [];
-          for (const line of stat.split("\n").filter(l => l.includes("|"))) {
-            const f = line.split("|")[0]?.trim();
-            if (f) filesChanged.push(f);
-          }
-          patches.push({
-            id: uuid(),
-            planId: opportunity.id,
-            diff,
-            files: filesChanged.slice(0, 3),
-            size: diff.length,
-            status: "pending",
-          });
-        }
-      } catch {
-        log("  No git diff available.");
+    // Capture diff
+    const { stdout: diff } = await execAsync("git diff 2>&1", { cwd, timeout: 10_000 });
+    await sleep(10);
+    if (diff.trim()) {
+      const { stdout: stat } = await execAsync("git diff --stat 2>&1", { cwd, timeout: 5_000 });
+      const filesChanged: string[] = [];
+      for (const line of stat.split("\n").filter(l => l.includes("|"))) {
+        const f = line.split("|")[0]?.trim();
+        if (f) filesChanged.push(f);
       }
-    } catch {
-      log("  Eslint --fix had issues.");
-    }
-  }
+      patches.push({
+        id: uuid(), planId: opportunity.id, diff,
+        files: filesChanged.slice(0, 3), size: diff.length, status: "pending",
+      });
+    } else log("  No changes after eslint --fix.");
+  } else log("  No auto-fix strategy for this opportunity type.");
 
   log(`  Generated ${patches.length} patch/patches.`);
+  await sleep(10);
   return patches;
 }
 
 // ─── Step 5: Write pending ───
 
-function writePendingPatches(patches: Patch[]) {
+async function writePendingPatches(patches: Patch[]) {
   log(`Step 5/5: Writing ${patches.length} patch/patches for review...`);
   for (const patch of patches) {
     writePending(patch);
     log(`  Written: ${patch.id.slice(0, 8)}`);
   }
+  await sleep(10);
 }
 
-// ─── Main entry point ───
+// ─── Pipeline Progress (shared with dashboard) ───
 
 export interface PipelineProgress {
-  status: "idle" | "running" | "completed" | "failed";
+  status: "idle" | "running" | "completed" | "failed" | "nothing-to-do";
   step: string;
   message: string;
   findings: number;
@@ -313,61 +302,83 @@ export interface PipelineProgress {
 
 let _progress: PipelineProgress = {
   status: "idle",
-  step: "",
-  message: "",
-  findings: 0,
-  patches: 0,
+  step: "", message: "", findings: 0, patches: 0,
 };
 
 export function getPipelineProgress(): PipelineProgress {
   return { ..._progress };
 }
 
+// ─── Main entry ───
+
 export async function runAutoPipeline(): Promise<PipelineProgress> {
   _progress = { status: "running", step: "starting", message: "Starting pipeline...", findings: 0, patches: 0 };
   log("Pipeline started.");
 
   try {
-    // Step 1
+    // Step 1 — Vision
     _progress = { ..._progress, step: "Vision check", message: "Checking vision..." };
     log(`  → ${_progress.step}`);
-    const vision = ensureVision();
-    if (!vision) throw new Error("Failed to create/read vision");
+    const vision = await ensureVision();
+    await sleep(10);
 
-    // Step 2
+    // Step 2 — Scan
     _progress = { ..._progress, step: "Code scan", message: "Scanning codebase..." };
     log(`  → ${_progress.step}`);
-    const scan = scanCode();
+    const scan = await scanCode();
     _progress.findings = scan.findings.length + scan.todos.length + scan.testFailures.length;
     _progress.message = `Found ${_progress.findings} issue(s)`;
 
-    // Step 3
+    // Early exit if nothing found
+    if (_progress.findings === 0) {
+      _progress.status = "nothing-to-do";
+      _progress.step = "Complete";
+      _progress.message = "No issues found — codebase looks clean!";
+      log("  No issues found — stopping early.");
+      return { ..._progress };
+    }
+    await sleep(10);
+
+    // Step 3 — Opportunities
     _progress = { ..._progress, step: "Opportunities", message: "Creating improvement opportunities..." };
     log(`  → ${_progress.step}`);
-    const opportunities = createOpportunities(vision, scan);
-    for (const opp of opportunities) {
-      saveOpportunity(opp);
-    }
+    const opportunities = await createOpportunities(scan);
+    for (const opp of opportunities) saveOpportunity(opp);
 
-    // Step 4
+    if (opportunities.length === 0) {
+      _progress.status = "nothing-to-do";
+      _progress.step = "Complete";
+      _progress.message = `${_progress.findings} issue(s) found but no actionable opportunities`;
+      log("  No actionable opportunities — stopping early.");
+      return { ..._progress };
+    }
+    await sleep(10);
+
+    // Step 4 — Generate patches (best opportunity)
     _progress = { ..._progress, step: "Generating patches", message: "Generating automated patches..." };
     log(`  → ${_progress.step}`);
-    let patches: Patch[] = [];
-    if (opportunities.length > 0) {
-      const sorted = [...opportunities].sort((a, b) => {
-        const val = { low: 1, medium: 2, high: 3, critical: 4 };
-        const eff = { trivial: 4, small: 3, medium: 2, large: 1, epic: 0 };
-        return (val[b.estimatedValue] || 0) * (eff[b.estimatedEffort] || 0) -
-               (val[a.estimatedValue] || 0) * (eff[a.estimatedEffort] || 0);
-      });
-      patches = generatePatches(sorted[0]!);
-    }
+    const sorted = [...opportunities].sort((a, b) => {
+      const v: Record<string, number> = { low: 1, medium: 2, high: 3, critical: 4 };
+      const e: Record<string, number> = { trivial: 4, small: 3, medium: 2, large: 1, epic: 0 };
+      return (v[b.estimatedValue] || 0) * (e[b.estimatedEffort] || 0) -
+             (v[a.estimatedValue] || 0) * (e[a.estimatedEffort] || 0);
+    });
+    const patches = await generatePatches(sorted[0]!);
+    _progress.patches = patches.length;
 
-    // Step 5
+    if (patches.length === 0) {
+      _progress.status = "nothing-to-do";
+      _progress.step = "Complete";
+      _progress.message = `${opportunities.length} opportunity/opportunities logged but no auto-fix patches generated`;
+      log("  No patches generated — stopping early.");
+      return { ..._progress };
+    }
+    await sleep(10);
+
+    // Step 5 — Write pending
     _progress = { ..._progress, step: "Writing patches", message: "Writing patches for review..." };
     log(`  → ${_progress.step}`);
-    writePendingPatches(patches);
-    _progress.patches = patches.length;
+    await writePendingPatches(patches);
 
     _progress.status = "completed";
     _progress.message = `${patches.length} patch(es) ready for review`;

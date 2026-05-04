@@ -35,6 +35,9 @@ function cursorTo(row: number, col: number): string {
 function clearScreen(): string {
   return `${CSI}2J`;
 }
+function eraseDown(): string {
+  return `${CSI}J`;
+}
 function hideCursor(): string {
   return `${CSI}?25l`;
 }
@@ -210,7 +213,7 @@ function logColor(line: string): string {
 function render(state: DashboardState, layout: Layout): string {
   const { cols, rows } = layout;
   if (cols < 50 || rows < 15) {
-    return hideCursor() + cursorTo(1, 1) + clearScreen() +
+    return hideCursor() + cursorTo(1, 1) + eraseDown() +
       pc.red("Terminal too small. Need at least 50x15.") + showCursor();
   }
 
@@ -357,7 +360,7 @@ function renderSpecOverlay(cols: number, rows: number): string {
   // Dismiss hint
   output.push(cursorTo(startRow + overlayH + 1, startCol) + pc.dim(" Press any key to close this screen and open the dashboard "));
 
-  return hideCursor() + clearScreen() + output.join("\n");
+  return hideCursor() + eraseDown() + output.join("\n");
 }
 
 /**
@@ -467,7 +470,7 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   let running = true;
   let autoRefresh = true;
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
-  let showingSpec = true; // Welcome: show pipeline spec on first open
+  let showingSpec = false; // Pipeline spec overlay (hidden by default)
 
   function getDimensions() {
     return { cols: stdout.columns ?? 80, rows: stdout.rows ?? 24 };
