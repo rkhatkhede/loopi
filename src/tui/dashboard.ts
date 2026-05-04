@@ -1,19 +1,21 @@
 /**
  * loopi TUI Dashboard
  *
- * A real-time terminal dashboard showing the system overview.
- * Uses ANSI escape codes and picocolors — zero additional dependencies.
+ * Hands-off autonomous improvement agent.
+ * Runs in background — human checks in periodically.
  *
- * Launched via: loopi
+ * Pipeline auto-scans, creates feature branches per task,
+ * generates patches, self-reviews, and merges approved patches
+ * into dev. Human promotes dev → main when ready.
  *
  * Controls:
  *   q        — Quit dashboard
  *   r        — Force refresh
  *   Space    — Toggle auto-refresh
- *   a        — Approve latest feature branch (merge into dev)
+ *   a        — Manually approve latest feature branch (merge into dev)
  *   R (shift) — Reject latest feature branch (delete)
  *   p        — Promote dev → main
- *   ?        — Show pipeline spec (any key to dismiss)
+ *   ?        — Show pipeline spec
  */
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { resolve } from "path";
@@ -174,14 +176,14 @@ function collectState(layout: Layout): DashboardState {
     currentStep: prog.step || "—",
     currentAgent: "loopi",
     lastResult: prog.message || "—",
-    currentOpportunity: opp || (prog.findings > 0 ? `${prog.findings} issues, ${prog.patches} patches` : "—"),
+    currentOpportunity: opp || (prog.findings > 0 ? `${prog.findings} issues` : "—"),
     pendingCount: pending,
     approvedCount: approved,
     rejectedCount: 0,
     logs: logLines,
     error: prog.error,
     featureBranches,
-    appliedCount: prog.patches,
+    appliedCount: prog.autoMerged ?? prog.patches,
   };
 }
 
