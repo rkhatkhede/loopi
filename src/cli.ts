@@ -14,9 +14,11 @@ import { homedir } from "os";
 import { existsSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "./actions/config.js";
+import { runOnboarding } from "./actions/onboarding.js";
 import { runDashboard } from "./tui/dashboard.js";
 import { installAgents } from "./actions/install.js";
 import { initProject } from "./actions/init.js";
+import { readVision } from "./pipeline.js";
 import pc from "picocolors";
 
 async function main() {
@@ -34,37 +36,32 @@ async function main() {
     exit(0);
   }
 
-  // Auto-init if not yet set up
-  const configDir = resolve(process.cwd(), ".pi/loopi");
-  if (!existsSync(configDir)) {
-    console.log(pc.dim("⚡ First run — initializing loopi..."));
-    initProject();
-    console.log();
-  }
-
-  // Load config
-  try {
-    loadConfig();
-  } catch (err) {
-    console.error(`Config error: ${err instanceof Error ? err.message : String(err)}`);
-    console.error(pc.dim("Try deleting .pi/loopi/config.json and running loopi again."));
-    exit(1);
-  }
-
-  // Auto-install agents (idempotent — overwrites existing)
-  const agentDir = resolve(
-    homedir(),
-    ".pi/agent/agents"
-  );
-  const needsInstall =
-    !existsSync(agentDir) ||
-    !existsSync(resolve(agentDir, "vision-agent.md"));
-  if (needsInstall) {
+  // Auto-install agents (idempotent — always present after first run)
+  const agentDir = resolve(homedir(), ".pi/agent/agents");
+  if (!existsSync(agentDir) || !existsSync(resolve(agentDir, "vision-agent.md"))) {
     const count = installAgents();
     console.log(pc.green(`\n✓ Installed ${count} loopi agents globally`));
   }
 
-  // Open dashboard
+  // First run? Run the onboarding wizard
+  const configDir = resolve(process.cwd(), ".pi/loopi");
+  if (!existsSync(configDir)) {
+    console.log(pc.dim("⚡ First run detected — let's set up your project.\n"));
+    initProject();
+    await runOnboarding();
+    console.log();
+  } else {
+    // Load config on subsequent runs
+    try {
+      loadConfig();
+    } catch (err) {
+      console.error(`Config error: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(pc.dim("Try deleting .pi/loopi/config.json and running loopi again."));
+      exit(1);
+    }
+  }
+
+  // Open dashboard — auto-starts the pipeline
   await runDashboard();
   exit(0);
 }
@@ -80,11 +77,17 @@ function showHelp(): void {
 ╚══════════════════════════════════════════════════════════╝
 
   Usage:
-    loopi                 Auto-init + auto-install + open dashboard (default)
+    loopi                 Onboarding wizard (first run) + auto-scan + dashboard
     loopi --help          Show this message
     loopi --version       Show version
 
-  Everything is in the TUI dashboard:
+  First run walks you through project vision setup, then:
+    • Scans codebase for lint errors, test failures, TODOs
+    • Creates improvement opportunities
+    • Auto-fixes what it can (eslint)
+    • Opens dashboard for review & approval
+
+  Dashboard keys:
     [a] approve patch     [R] reject patch       [p] promote dev→main
     [?] show pipeline spec [q] quit              [r] refresh
 
