@@ -5,13 +5,9 @@
 loopi is available as a pnpm package. Run it in any repository:
 
 ```bash
-pnpx @rkhatkhede/loopi init       # Initialize loopi in the current repo
-pnpx @rkhatkhede/loopi run        # Print pipeline spec for pi agent to execute
-pnpx @rkhatkhede/loopi status     # Show current system state
-pnpx @rkhatkhede/loopi dashboard  # Open the live TUI dashboard
-pnpx @rkhatkhede/loopi approve    # Apply the latest pending diff (merges into dev)
-pnpx @rkhatkhede/loopi reject     # Discard the latest pending diff
-pnpx @rkhatkhede/loopi promote    # Merge dev → main (end of session)
+pnpx @rkhatkhede/loopi              # Auto-init + print pipeline spec (default)
+pnpx @rkhatkhede/loopi dashboard   # Open the live TUI dashboard
+pnpx @rkhatkhede/loopi install     # Install loopi agents globally
 ```
 
 ## Architecture
@@ -72,10 +68,9 @@ main ─── A ── B ── B'  (promote → main when session is done)
 
 ## How It Works
 
-1. **Install**: `loopi install` copies 8 agent `.md` files to `~/.pi/agent/agents/` for pi.dev discovery
-2. **Init**: `loopi init` creates `.pi/loopi/` with config and workflow directories
-3. **Run**: `loopi run` prints the pipeline spec — a pi agent reads and executes it
-4. **Approve/Reject**: Each proposed change requires human approval via `contact_supervisor`
+1. **Install** (one-time): `loopi install` copies 8 agent `.md` files to `~/.pi/agent/agents/`
+2. **Run**: `loopi` (no args) auto-inits if needed, then prints the pipeline spec for pi to execute
+3. **Dashboard**: `loopi dashboard` — TUI with approve/reject/promote built in via keybindings
 
 The pipeline runs inside your pi coding assistant. The pi agent reads
 `src/pipeline.ts` and executes each step using `subagent()` and `bash`.
@@ -88,9 +83,8 @@ pnpm install -g @rkhatkhede/loopi
 
 # Or run without installing (pnpx auto-downloads)
 cd your-project
-pnpx @rkhatkhede/loopi init       # Creates .pi/loopi/ + installs agents globally
-pnpx @rkhatkhede/loopi status     # Check everything is set up
-pnpx @rkhatkhede/loopi dashboard  # Open the live dashboard
+pnpx @rkhatkhede/loopi              # Auto-inits + prints pipeline spec
+pnpx @rkhatkhede/loopi dashboard   # Open the live TUI dashboard
 ```
 
 ## Configuration

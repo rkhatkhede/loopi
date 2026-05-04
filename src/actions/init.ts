@@ -41,8 +41,7 @@ export function initProject(): void {
   console.log(pc.dim(`  Approved: .pi/loopi/workflows/approved/`));
   console.log(pc.dim(`  Agents:  ${agentCount} installed globally at ${globalDir}`));
   console.log();
-  console.log(pc.cyan("  Run: loopi run      — Start improvement cycle"));
-  console.log(pc.cyan("  Run: loopi status   — Show system status"));
-  console.log(pc.cyan("  Run: loopi dashboard — Open TUI dashboard"));
+  console.log(pc.cyan("  Run: loopi           — Start improvement cycle"));
+  console.log(pc.cyan("  Run: loopi dashboard  — Open TUI dashboard"));
   console.log();
 }

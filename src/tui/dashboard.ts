@@ -18,7 +18,8 @@ import { readFileSync, readdirSync, existsSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "../actions/config.js";
 import { listPending, listApproved } from "../actions/pr.js";
-import { readVision, readOpportunityHistory } from "../pipeline.js";
+import { readVision, readOpportunityHistory, approvePending, rejectPending, promoteToMain } from "../pipeline.js";
+import { logger } from "../actions/logger.js";
 import pc from "picocolors";
 
 // ─── Terminal control ───
@@ -390,19 +391,37 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
     }
 
     if (char === "a") {
-      onAction?.({ type: "approve" });
+      if (onAction) {
+        onAction({ type: "approve" });
+      } else {
+        approvePending(".").then((ok) => {
+          if (ok) logger.info("Patch approved and merged.");
+        });
+      }
       refresh();
       return;
     }
 
     if (data === "R") {
-      onAction?.({ type: "reject" });
+      if (onAction) {
+        onAction({ type: "reject" });
+      } else {
+        rejectPending().then((ok) => {
+          if (ok) logger.info("Patch rejected.");
+        });
+      }
       refresh();
       return;
     }
 
     if (char === "p") {
-      onAction?.({ type: "promote" });
+      if (onAction) {
+        onAction({ type: "promote" });
+      } else {
+        promoteToMain(".").then((ok) => {
+          if (ok) logger.info("Promoted dev → main.");
+        });
+      }
       refresh();
       return;
     }
