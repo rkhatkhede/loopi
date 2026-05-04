@@ -15,7 +15,7 @@ import { existsSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "./actions/config.js";
 import { runOnboarding } from "./actions/onboarding.js";
-import { runDashboard } from "./tui/dashboard.js";
+import { startDashboard } from "./dashboard/server.js";
 import { installAgents } from "./actions/install.js";
 import { initProject } from "./actions/init.js";
 import { RPCClient } from "./rpc-client.js";
@@ -80,8 +80,18 @@ async function main() {
     }
   }
 
-  // Open dashboard — auto-starts the pipeline
-  await runDashboard();
+  // Open web dashboard — auto-starts the pipeline
+  const { port } = await startDashboard();
+  console.log(pc.green(`\n⚡ loopi dashboard: http://127.0.0.1:${port}`));
+  console.log(pc.dim("  Press Ctrl+C to stop.\n"));
+
+  // Keep alive until Ctrl+C
+  await new Promise<void>((resolve) => {
+    process.on("SIGINT", () => {
+      console.log();
+      resolve();
+    });
+  });
   exit(0);
 }
 
@@ -106,12 +116,12 @@ function showHelp(): void {
     • Auto-fixes what it can (eslint)
     • Opens dashboard for review & approval
 
-  Dashboard keys:
-    [a] approve patch     [R] reject patch       [p] promote dev→main
-    [Space] toggle auto-refresh  [q] quit        [r] refresh
+  Dashboard:
+    Opens a browser at http://127.0.0.1:{port}
+    Approve/reject patches, promote dev→main, view logs
 
   Examples:
-    pnpx @rkhatkhede/loopi
+    npx @rkhatkhede/loopi
 
   Learn more: https://github.com/rkhatkhede/loopi
   `);
