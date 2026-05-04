@@ -19,7 +19,7 @@ import { readFileSync, readdirSync, existsSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "../actions/config.js";
 import { listPending, listApproved } from "../actions/pr.js";
-import { readVision, readOpportunityHistory, approvePending, rejectPending, promoteToMain, PIPELINE_SPEC } from "../pipeline.js";
+import { readVision, readOpportunityHistory, approvePending, rejectPending, promoteToMain, readPatterns, PIPELINE_SPEC } from "../pipeline.js";
 import { logger } from "../actions/logger.js";
 import pc from "picocolors";
 
@@ -302,7 +302,7 @@ function renderSpecOverlay(cols: number, rows: number): string {
 
   // Calculate overlay dimensions
   const overlayW = Math.min(cols - 4, 80);
-  const overlayH = Math.min(rows - 4, specLines.length + 4);
+  const overlayH = Math.min(rows - 4, specLines.length + 8);
   const startRow = Math.floor((rows - overlayH) / 2);
   const startCol = Math.floor((cols - overlayW) / 2);
 
@@ -313,6 +313,16 @@ function renderSpecOverlay(cols: number, rows: number): string {
 
   // Top border
   output.push(pc.cyan(boxTop(overlayW)));
+
+  // Welcome header
+  const welcome = pc.bold(pc.green(" ⚡ loopi — Local Autonomous Improvement Agent "));
+  output.push(pc.cyan(BORDER_V) + welcome.padEnd(overlayW - 2).slice(0, overlayW - 2) + pc.cyan(BORDER_V));
+
+  output.push(pc.cyan(BORDER_V) + " This dashboard monitors the pipeline. The pi agent   " + pc.cyan(BORDER_V));
+  output.push(pc.cyan(BORDER_V) + " runs the steps below via subagent() calls.          " + pc.cyan(BORDER_V));
+
+  // Divider
+  output.push(pc.cyan(BORDER_LT) + repeat(pc.cyan(BORDER_H), overlayW - 2) + pc.cyan(BORDER_RT));
 
   // Title
   const title = pc.bold(" PIPELINE SPECIFICATION ");
@@ -337,10 +347,75 @@ function renderSpecOverlay(cols: number, rows: number): string {
   // Bottom border
   output.push(pc.cyan(boxBot(overlayW)));
 
+  // Status summary line below the box
+  const summary = buildSummaryLine();
+  output.push(cursorTo(startRow + overlayH, startCol) + " " + summary);
+
   // Dismiss hint
-  output.push(cursorTo(startRow + overlayH, startCol) + pc.dim(" Press any key to dismiss "));
+  output.push(cursorTo(startRow + overlayH + 1, startCol) + pc.dim(" Press any key to close this screen and open the dashboard "));
 
   return hideCursor() + clearScreen() + output.join("\n");
+}
+
+/**
+ * Build a one-line status summary (vision, pending patches, patterns).
+ */
+function buildSummaryLine(): string {
+  const parts: string[] = [];
+
+  // Vision
+  try {
+    const vision = readVision();
+    if (vision) {
+      const total = vision.milestones?.length ?? 0;
+      const done = vision.milestones?.filter((m: any) => m.status === "completed").length ?? 0;
+      if (total > 0) {
+        parts.push(pc.green(`✓ milestones ${done}/${total}`));
+      } else {
+        parts.push(pc.green("✓ vision set"));
+      }
+    } else {
+      parts.push(pc.yellow("○ no vision yet"));
+    }
+  } catch {
+    parts.push(pc.yellow("○ no vision yet"));
+  }
+
+  // Pending patches
+  try {
+    const pending = listPending();
+    if (pending.length > 0) {
+      parts.push(pc.yellow(`⚠ ${pending.length} patch${pending.length > 1 ? "es" : ""} pending`));
+    } else {
+      parts.push(pc.dim("○ no pending patches"));
+    }
+  } catch {
+    parts.push(pc.dim("○ no pending patches"));
+  }
+
+  // Past patterns
+  try {
+    const patterns = readPatterns();
+    if (patterns.length > 0) {
+      const last = patterns[patterns.length - 1];
+      const ago = msAgo(last.createdAt);
+      parts.push(pc.dim(`◈ ${patterns.length} pattern${patterns.length > 1 ? "s" : ""}, latest ${ago}`));
+    }
+  } catch {
+    // ignore
+  }
+
+  if (parts.length === 0) return "";
+  return parts.join(pc.dim(" · "));
+}
+
+function msAgo(ts: number): string {
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ago`;
 }
 
 // ─── Dashboard loop ───
@@ -389,7 +464,7 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   let running = true;
   let autoRefresh = true;
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
-  let showingSpec = false;
+  let showingSpec = true; // Welcome: show pipeline spec on first open
 
   function getDimensions() {
     return { cols: stdout.columns ?? 80, rows: stdout.rows ?? 24 };
