@@ -18,7 +18,7 @@
  *   6. Save state, report results
  */
 
-import { existsSync, appendFileSync, mkdirSync } from "fs";
+import { existsSync, appendFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, readFileSync } from "fs";
 import { resolve } from "path";
 import { exec } from "child_process";
 import crypto from "crypto";
@@ -27,7 +27,7 @@ import {
   readVision, saveVision, saveOpportunity, readOpportunityHistory,
   readPatterns, savePattern,
   readGoals, saveGoal,
-  readTasks, saveTask,
+  readTasks, saveTask, updateTaskStatus,
   applyPatch, approveFeatureBranch, rejectFeatureBranch
 } from "./pipeline.js";
 import { RPCClient } from "./rpc-client.js";
@@ -93,6 +93,12 @@ export interface PipelineProgress {
   autoMerged?: number;
   autoRejected?: number;
   error?: string;
+  /** Resume checkpoint fields */
+  cycleNumber?: number;
+  currentTaskIndex?: number;
+  totalTasks?: number;
+  completedTaskNames?: string[];
+  rejectedTaskNames?: string[];
 }
 
 let _progress: PipelineProgress = {
@@ -103,7 +109,47 @@ let _progress: PipelineProgress = {
   patches: 0,
 };
 
+const STATE_FILE = resolve(process.cwd(), ".pi/loopi/state.json");
+
+/** Persist current progress to state.json so we can resume after crash */
+function saveProgress(): void {
+  try {
+    const dir = resolve(process.cwd(), ".pi/loopi");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const tmp = STATE_FILE + ".tmp." + process.pid;
+    writeFileSync(tmp, JSON.stringify(_progress, null, 2), "utf-8");
+    renameSync(tmp, STATE_FILE);
+  } catch {
+    // best effort — state saving should never crash the pipeline
+  }
+}
+
+/** Load saved progress from disk — returns null if no saved state */
+function loadProgress(): PipelineProgress | null {
+  try {
+    if (!existsSync(STATE_FILE)) return null;
+    const raw = readFileSync(STATE_FILE, "utf-8");
+    return JSON.parse(raw) as PipelineProgress;
+  } catch {
+    return null;
+  }
+}
+
+/** Clear saved state (called on successful completion) */
+function clearProgress(): void {
+  try {
+    if (existsSync(STATE_FILE)) unlinkSync(STATE_FILE);
+  } catch {
+    // best effort
+  }
+}
+
 export function getPipelineProgress(): PipelineProgress {
+  // Merge in-memory with saved state (saved state may have checkpoint fields)
+  const saved = loadProgress();
+  if (saved && saved.status === "running") {
+    return { ...saved, ..._progress };
+  }
   return { ..._progress };
 }
 
@@ -631,22 +677,40 @@ async function improveWithPi(
 // ─── Main Entry ───
 
 export async function runAutoPipeline(): Promise<PipelineProgress> {
-  _progress = {
-    status: "running",
-    step: "starting",
-    message: "Starting pipeline...",
-    findings: 0,
-    patches: 0,
-  };
   const pipelineStartTime = Date.now();
-  log("Pipeline started.");
+
+  // ── Check for saved state (resume from crash) ──
+  const saved = loadProgress();
+  const isResume = saved && saved.status === "running" && (saved.step === "Processing" || saved.step === "Improving");
+
+  if (isResume) {
+    log(`Resuming pipeline from saved state (step: ${saved.step}, task ${(saved.completedTaskNames || []).length}/${saved.totalTasks})`);
+    _progress = {
+      ...saved,
+      status: "running",
+    } as PipelineProgress;
+  } else {
+    _progress = {
+      status: "running",
+      step: "starting",
+      message: "Starting pipeline...",
+      findings: 0,
+      patches: 0,
+      cycleNumber: (saved?.cycleNumber ?? 0) + 1,
+    };
+    log("Pipeline started.");
+    // Clear stale state from previous failed run
+    clearProgress();
+  }
 
   const rpc = new RPCClient();
 
   try {
     // ── Check pi availability ──
-    _progress = { ..._progress, step: "Preflight", message: "Checking pi.dev availability..." };
-    log("  → Checking pi.dev CLI...");
+    if (!isResume) {
+      _progress = { ..._progress, step: "Preflight", message: "Checking pi.dev availability..." };
+      log("  → Checking pi.dev CLI...");
+    }
 
     const piAvailable = await RPCClient.isAvailable();
     if (!piAvailable) {
@@ -655,132 +719,173 @@ export async function runAutoPipeline(): Promise<PipelineProgress> {
         "pi.dev CLI not found. Install: npm install -g @mariozechner/pi-coding-agent";
       _progress.message = _progress.error;
       log(`  ✖ ${_progress.error}`);
+      saveProgress();
       return { ..._progress };
     }
-    log("  ✓ pi.dev CLI found.");
+    if (!isResume) log("  ✓ pi.dev CLI found.");
 
     // ── Spawn RPC connection ──
-    _progress = { ..._progress, step: "Connecting", message: "Connecting to pi.dev RPC..." };
-    log("  → Spawning pi RPC mode...");
+    if (!isResume) {
+      _progress = { ..._progress, step: "Connecting", message: "Connecting to pi.dev RPC..." };
+      log("  → Spawning pi RPC mode...");
+    }
     await rpc.spawn();
-    log("  ✓ Connected to pi.dev RPC.");
+    if (!isResume) log("  ✓ Connected to pi.dev RPC.");
 
-    // ── Step 1: Vision ──
-    _progress = { ..._progress, step: "Vision", message: "Checking vision..." };
-    log("  → Step 1: Vision");
-    const vision = await ensureVision();
+    // ── Variables used throughout ──
+    let tasks: AnalyzeTask[] = [];
+    let scanResult: ScanResult | null = null;
+    let totalMerged = _progress.autoMerged ?? 0;
+    let totalRejected = _progress.autoRejected ?? 0;
 
-    // ── Step 2: Scan ──
-    _progress = {
-      ..._progress,
-      step: "Scanning",
-      message: "Scanning codebase with pi.dev RepoScanAgent...",
-    };
-    log("  → Step 2: Scan");
-    const scanResult = await scanWithPi(vision, rpc);
-    _progress.findings = scanResult.findings?.length ?? 0;
+    if (isResume) {
+      // Resume: load tasks from saved tasks.json, skip scan + analyze
+      log("  → Resuming: loading saved tasks from disk...");
+      const persistedTasks = readTasks();
+      const completedNames = _progress.completedTaskNames ?? [];
+      const rejectedNames = _progress.rejectedTaskNames ?? [];
 
-    if (_progress.findings === 0 && !scanResult.summary) {
-      _progress.status = "nothing-to-do";
-      _progress.step = "Complete";
-      _progress.message = "No findings from scan — codebase looks clean!";
-      log("  No findings — stopping.");
-      return { ..._progress };
-    }
-    await sleep(10);
+      // Reconstruct AnalyzeTask[] from persisted tasks
+      tasks = persistedTasks
+        .filter(t => t.goalId) // only goal-linked tasks
+        .map(t => ({
+          title: t.name,
+          description: t.description ?? "",
+          impact: t.impact as "low" | "medium" | "high",
+          effort: t.effort as "small" | "medium" | "large",
+          category: t.category ?? "quality",
+          filesLikelyAffected: t.filesAffected as string[] | undefined,
+        }));
 
-    // ── Step 3: Analyze ──
-    _progress = {
-      ..._progress,
-      step: "Analyzing",
-      message: "Analyzing findings with pi.dev AnalyzerAgent...",
-    };
-    log("  → Step 3: Analyze");
-    const analyzeResult = await analyzeWithPi(vision, scanResult, rpc);
-    const tasks = analyzeResult.tasks ?? [];
-    _progress.message = `${tasks.length} task(s) identified`;
+      _progress.totalTasks = tasks.length;
+      log(`  Loaded ${tasks.length} task(s), ${completedNames.length} completed, ${rejectedNames.length} rejected`);
 
-    if (tasks.length === 0) {
-      _progress.status = "nothing-to-do";
-      _progress.step = "Complete";
-      _progress.message = `${_progress.findings} finding(s) found but no actionable tasks`;
-      log("  No actionable tasks — stopping.");
-      return { ..._progress };
+      if (tasks.length === 0 || (completedNames.length + rejectedNames.length >= tasks.length)) {
+        // All tasks already processed — skip to improve
+        totalMerged = completedNames.length;
+        totalRejected = rejectedNames.length;
+        log("  All tasks already processed — skipping to self-improvement.");
+      }
     }
 
-    // Save scan findings as opportunities for dashboard
-    for (const finding of scanResult.findings ?? []) {
-      // Convert top findings to opportunities
-      if (finding.severity === "critical" || finding.severity === "high") {
-        const opp: Opportunity = {
-          id: uuid(),
-          createdAt: Date.now(),
-          title: finding.message.slice(0, 200),
-          description: `${finding.file}${finding.line ? `:${finding.line}` : ""} — ${finding.message}`,
-          category: (finding.category as any) ?? "quality",
-          estimatedValue: finding.severity === "critical" ? "critical" : "high",
-          estimatedEffort: "medium",
-          affectedAreas: finding.file ? [finding.file] : [],
-          status: "suggested",
-        };
-        try {
-          saveOpportunity(opp);
-        } catch {
-          // best effort
+    // Hoist vision for both fresh and resume paths
+    let vision = readVision();
+    if (!vision) vision = await ensureVision();
+
+    if (!isResume) {
+      // ── Step 1: Vision ──
+      _progress = { ..._progress, step: "Vision", message: "Checking vision..." };
+      log("  → Step 1: Vision");
+      saveProgress();
+
+      // ── Step 2: Scan ──
+      _progress = {
+        ..._progress,
+        step: "Scanning",
+        message: "Scanning codebase with pi.dev RepoScanAgent...",
+      };
+      log("  → Step 2: Scan");
+      scanResult = await scanWithPi(vision, rpc);
+      _progress.findings = scanResult.findings?.length ?? 0;
+      saveProgress();
+
+      if (_progress.findings === 0 && !scanResult.summary) {
+        _progress.status = "nothing-to-do";
+        _progress.step = "Complete";
+        _progress.message = "No findings from scan — codebase looks clean!";
+        log("  No findings — stopping.");
+        clearProgress();
+        return { ..._progress };
+      }
+      await sleep(10);
+
+      // ── Step 3: Analyze ──
+      _progress = {
+        ..._progress,
+        step: "Analyzing",
+        message: "Analyzing findings with pi.dev AnalyzerAgent...",
+      };
+      log("  → Step 3: Analyze");
+      const analyzeResult = await analyzeWithPi(vision, scanResult, rpc);
+      tasks = analyzeResult.tasks ?? [];
+      _progress.message = `${tasks.length} task(s) identified`;
+      _progress.totalTasks = tasks.length;
+      saveProgress();
+
+      if (tasks.length === 0) {
+        _progress.status = "nothing-to-do";
+        _progress.step = "Complete";
+        _progress.message = `${_progress.findings} finding(s) found but no actionable tasks`;
+        log("  No actionable tasks — stopping.");
+        clearProgress();
+        return { ..._progress };
+      }
+
+      // Save scan findings as opportunities for dashboard
+      for (const finding of scanResult.findings ?? []) {
+        if (finding.severity === "critical" || finding.severity === "high") {
+          const opp: Opportunity = {
+            id: uuid(),
+            createdAt: Date.now(),
+            title: finding.message.slice(0, 200),
+            description: `${finding.file}${finding.line ? `:${finding.line}` : ""} — ${finding.message}`,
+            category: (finding.category as any) ?? "quality",
+            estimatedValue: finding.severity === "critical" ? "critical" : "high",
+            estimatedEffort: "medium",
+            affectedAreas: finding.file ? [finding.file] : [],
+            status: "suggested",
+          };
+          try { saveOpportunity(opp); } catch { /* best effort */ }
         }
       }
-    }
 
-    // Auto-generate a goal for the active milestone and persist tasks
-    const activeMilestoneIdx = vision.milestones?.findIndex(
-      m => m.status === "pending" || m.status === "in_progress"
-    ) ?? -1;
-    let currentGoalId: string | null = null;
-    if (activeMilestoneIdx >= 0 && tasks.length > 0) {
-      const existingGoals = readGoals();
-      const milestoneName = vision.milestones![activeMilestoneIdx]!.name;
-      // Reuse an existing in_progress goal for this milestone, or create one
-      let goal = existingGoals.find(
-        g => g.milestoneIndex === activeMilestoneIdx && g.status !== "completed"
-      );
-      if (!goal) {
-        goal = {
-          id: uuid(),
-          milestoneIndex: activeMilestoneIdx,
-          name: `Improve: ${milestoneName}`,
-          description: `Auto-generated goal for milestone: ${milestoneName}`,
-          priority: "high",
-          status: "in_progress",
-          createdAt: new Date().toISOString(),
-        };
-        saveGoal(goal);
-        log(`  Created goal: "${goal.name}"`);
-      }
-      currentGoalId = goal.id;
-
-      // Persist each analyze task
-      for (const at of tasks) {
-        const existingTasks = readTasks();
-        const alreadyExists = existingTasks.some(t => t.name === at.title);
-        if (!alreadyExists) {
-          const persistentTask: Task = {
+      // Auto-generate a goal for the active milestone and persist tasks
+      const activeMilestoneIdx = vision.milestones?.findIndex(
+        m => m.status === "pending" || m.status === "in_progress"
+      ) ?? -1;
+      if (activeMilestoneIdx >= 0 && tasks.length > 0) {
+        const existingGoals = readGoals();
+        const milestoneName = vision.milestones![activeMilestoneIdx]!.name;
+        let goal = existingGoals.find(
+          g => g.milestoneIndex === activeMilestoneIdx && g.status !== "completed"
+        );
+        if (!goal) {
+          goal = {
             id: uuid(),
-            goalId: currentGoalId,
-            name: at.title,
-            description: at.description,
-            impact: at.impact as "low" | "medium" | "high",
-            effort: at.effort as "small" | "medium" | "large",
-            category: at.category ?? "quality",
-            status: "pending",
-            filesAffected: at.filesLikelyAffected ?? [],
+            milestoneIndex: activeMilestoneIdx,
+            name: `Improve: ${milestoneName}`,
+            description: `Auto-generated goal for milestone: ${milestoneName}`,
+            priority: "high" as const,
+            status: "in_progress" as const,
             createdAt: new Date().toISOString(),
           };
-          saveTask(persistentTask);
+          saveGoal(goal);
+          log(`  Created goal: "${goal.name}"`);
         }
+
+        for (const at of tasks) {
+          const existingTasks = readTasks();
+          const alreadyExists = existingTasks.some(t => t.name === at.title);
+          if (!alreadyExists) {
+            const persistentTask: Task = {
+              id: uuid(),
+              goalId: goal.id,
+              name: at.title,
+              description: at.description,
+              impact: at.impact as "low" | "medium" | "high",
+              effort: at.effort as "small" | "medium" | "large",
+              category: at.category ?? "quality",
+              status: "pending" as const,
+              filesAffected: at.filesLikelyAffected ?? [],
+              createdAt: new Date().toISOString(),
+            };
+            saveTask(persistentTask);
+          }
+        }
+        log(`  Persisted ${tasks.length} task(s) under goal "${goal.name}"`);
       }
-      log(`  Persisted ${tasks.length} task(s) under goal "${goal.name}"`);
+      await sleep(10);
     }
-    await sleep(10);
 
     // ── Step 4-5: Process each task ──
     _progress = {
@@ -789,21 +894,10 @@ export async function runAutoPipeline(): Promise<PipelineProgress> {
       message: "Processing each task via pi.dev agents...",
     };
     log("  → Step 4-5: Process tasks");
-    _progress.patches = 0;
-    let totalMerged = 0;
-    let totalRejected = 0;
 
     // Sort tasks by impact (high first), then effort (small first)
-    const impactOrder: Record<string, number> = {
-      high: 3,
-      medium: 2,
-      low: 1,
-    };
-    const effortOrder: Record<string, number> = {
-      small: 3,
-      medium: 2,
-      large: 1,
-    };
+    const impactOrder: Record<string, number> = { high: 3, medium: 2, low: 1 };
+    const effortOrder: Record<string, number> = { small: 3, medium: 2, large: 1 };
     const sortedTasks = [...tasks].sort((a, b) => {
       const ai = impactOrder[a.impact] ?? 0;
       const bi = impactOrder[b.impact] ?? 0;
@@ -811,30 +905,77 @@ export async function runAutoPipeline(): Promise<PipelineProgress> {
       return (effortOrder[a.effort] ?? 0) - (effortOrder[b.effort] ?? 0);
     });
 
+    // Compute already-done set for resume
+    const alreadyDone = new Set([
+      ...(_progress.completedTaskNames || []),
+      ...(_progress.rejectedTaskNames || []),
+    ]);
+
+    let taskIndex = 0;
     for (const task of sortedTasks) {
-      _progress.message = task.title;
+      _progress.currentTaskIndex = taskIndex;
+      _progress.totalTasks = tasks.length;
+
+      // Skip already-processed tasks on resume
+      if (alreadyDone.has(task.title)) {
+        log(`  [resume] Skipping already-processed: "${task.title}"`);
+        taskIndex++;
+        continue;
+      }
+
+      _progress.message = `${taskIndex + 1}/${tasks.length}: ${task.title}`;
+      log(`  [${taskIndex + 1}/${tasks.length}] Processing: ${task.title}`);
+      saveProgress();
+
       const result = await processTask(vision, task, rpc);
-      totalMerged += result.merged;
-      totalRejected += result.rejected;
+
+      // Mark task as completed or rejected in persisted tasks
+      if (result.merged > 0) {
+        totalMerged += result.merged;
+        _progress.completedTaskNames = [...(_progress.completedTaskNames || []), task.title];
+        try {
+          const allTasks = readTasks();
+          const match = allTasks.find(t => t.name === task.title);
+          if (match) updateTaskStatus([match.id], "completed");
+        } catch { /* best effort */ }
+      } else if (result.rejected > 0) {
+        totalRejected += result.rejected;
+        _progress.rejectedTaskNames = [...(_progress.rejectedTaskNames || []), task.title];
+        try {
+          const allTasks = readTasks();
+          const match = allTasks.find(t => t.name === task.title);
+          if (match) updateTaskStatus([match.id], "failed");
+        } catch { /* best effort */ }
+      }
+
       _progress.patches = totalMerged;
+      _progress.autoMerged = totalMerged;
+      _progress.autoRejected = totalRejected;
+      saveProgress();
       await sleep(10);
+      taskIndex++;
     }
 
     _progress.autoMerged = totalMerged;
     _progress.autoRejected = totalRejected;
 
     // ── Step 6: Self-improvement ──
-    const cycleStartTime = Date.now() - pipelineStartTime;
+    _progress.step = "Improving";
+    _progress.message = "Running self-improvement...";
+    saveProgress();
+
+    const cycleDuration = Date.now() - pipelineStartTime;
     const patterns = readPatterns();
+    const scanFindings = scanResult?.findings?.length ?? _progress.findings ?? 0;
     await improveWithPi(
       vision,
       {
-        opportunitiesFound: scanResult.findings?.length ?? 0,
+        opportunitiesFound: scanFindings,
         tasksCreated: tasks.length,
         tasksCompleted: totalMerged,
         tasksRejected: totalRejected,
         totalChanges: totalMerged,
-        cycleDurationMs: cycleStartTime,
+        cycleDurationMs: cycleDuration,
       },
       patterns,
       rpc
@@ -844,21 +985,17 @@ export async function runAutoPipeline(): Promise<PipelineProgress> {
     _progress.status = "completed";
     _progress.step = "Complete";
     _progress.message = `${totalMerged} task(s) merged, ${totalRejected} rejected`;
-    log(
-      `Pipeline complete: ${totalMerged} merged, ${totalRejected} rejected`
-    );
+    log(`Pipeline complete: ${totalMerged} merged, ${totalRejected} rejected`);
+    clearProgress();  // Remove state file — clean start next time
   } catch (e: any) {
     _progress.status = "failed";
     _progress.error = e.message || String(e);
     _progress.message = `Failed: ${_progress.error}`;
     log(`Pipeline failed: ${_progress.error}`);
+    saveProgress();  // Save failed state so user can see what happened
   } finally {
     // Clean up RPC connection
-    try {
-      rpc.close();
-    } catch {
-      // best effort
-    }
+    try { rpc.close(); } catch { /* best effort */ }
   }
 
   return { ..._progress };
