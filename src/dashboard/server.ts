@@ -173,6 +173,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <body>
 <div class="container" id="root"></div>
 
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script>
 const { createElement: h, useState, useEffect, useRef, useCallback } = React;
 const { createRoot } = ReactDOM;
@@ -431,8 +433,6 @@ function App() {
 const root = createRoot(document.getElementById('root'));
 root.render(h(App));
 </script>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 </body>
 </html>`;
 

@@ -85,6 +85,10 @@ async function main() {
   console.log(pc.green(`\n⚡ loopi dashboard: http://127.0.0.1:${port}`));
   console.log(pc.dim("  Press Ctrl+C to stop.\n"));
 
+  // Auto-start the pipeline in the background
+  const { runAutoPipeline } = await import("./pipeline-runner.js");
+  runAutoPipeline().catch(() => {});
+
   // Keep alive until Ctrl+C
   await new Promise<void>((resolve) => {
     process.on("SIGINT", () => {
