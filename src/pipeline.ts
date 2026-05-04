@@ -539,7 +539,7 @@ export const PIPELINE_SPEC = `
 - Validate the output with: parseAgentData(output, VisionSchema, "vision")
 
 ## Step 2: Find Opportunity
-- Read .pi/loopi/patterns.json via bash: node -e "console.log(JSON.stringify(require('./dist/pipeline.js').readPatterns()))"
+- Read .pi/loopi/patterns.json via bash: node -e "import('./dist/pipeline.js').then(m => console.log(JSON.stringify(m.readPatterns())))"
 - Run: subagent({ agent: "${AGENTS.OPPORTUNITY}", task: JSON.stringify({ vision, history, patterns }) })
 - Validate the output with: parseAgentData(output, z.array(OpportunitySchema), "opportunity")
 - Pick the best opportunity (highest value/effort ratio).

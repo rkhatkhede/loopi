@@ -34,20 +34,22 @@ Return a JSON object inside a fenced code block:
 
 ### After a Successful Patch
 
-**1. Update milestones** — If the patch progresses toward a vision milestone, mark it as in_progress or completed:
+**1. Update milestones** — If the patch progresses toward a vision milestone, mark it as in_progress or completed. Look at the plan's summary to decide which milestone this patch advances:
 
 ```bash
 node -e "
-const { readVision, saveVision } = require('./dist/pipeline.js');
-const vision = readVision();
-if (vision) {
-  const milestones = vision.milestones || [];
-  const milestone = milestones.find(m => /* match by name/description */ false);
-  if (milestone) {
-    milestone.status = 'in_progress';
+import('./dist/pipeline.js').then(({ readVision, saveVision }) => {
+  const vision = readVision();
+  if (!vision) return;
+  // Identify the milestone this patch advances by matching plan keywords
+  // against milestone names/descriptions, then update its status:
+  const ms = vision.milestones || [];
+  const target = ms.find(m => m.status !== 'completed'); // pick first uncompleted
+  if (target) {
+    target.status = 'in_progress';
     saveVision(vision);
   }
-}
+});
 "
 ```
 
@@ -55,16 +57,17 @@ if (vision) {
 
 ```bash
 node -e "
-const { savePattern, readPatterns } = require('./dist/pipeline.js');
-savePattern({
-  id: require('crypto').randomUUID(),
-  createdAt: Date.now(),
-  category: '<opportunity-category>',
-  summary: '<one-line summary of what was done>',
-  filesChanged: ['<path1>', '<path2>'],
-  patchSize: <number-of-lines-in-diff>,
-  outcome: 'approved',
-  tags: ['<tag1>', '<tag2>']
+import('./dist/pipeline.js').then(({ savePattern }) => {
+  savePattern({
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+    category: '<opportunity-category>',
+    summary: '<one-line summary of what was done>',
+    filesChanged: ['<path1>', '<path2>'],
+    patchSize: <number-of-lines-in-diff>,
+    outcome: 'approved',
+    tags: ['<tag1>', '<tag2>']
+  });
 });
 "
 ```
