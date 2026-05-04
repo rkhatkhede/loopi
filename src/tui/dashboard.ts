@@ -20,6 +20,7 @@ import { resolve } from "path";
 import { loadConfig } from "../actions/config.js";
 import { listPending, listApproved } from "../actions/pr.js";
 import { readVision, readOpportunityHistory, approvePending, rejectPending, promoteToMain, readPatterns, PIPELINE_SPEC } from "../pipeline.js";
+import { getPipelineProgress } from "../pipeline-runner.js";
 import { logger } from "../actions/logger.js";
 import pc from "picocolors";
 
@@ -98,6 +99,7 @@ interface DashboardState {
 }
 
 function collectState(layout: Layout): DashboardState {
+  const prog = getPipelineProgress();
   const cwd = process.cwd();
   const logLines: string[] = [];
 
@@ -138,16 +140,17 @@ function collectState(layout: Layout): DashboardState {
   }
 
   return {
-    status: "idle",
-    cycleNumber: 0,
-    currentStep: "—",
-    currentAgent: "—",
-    lastResult: "—",
-    currentOpportunity: opp || "—",
+    status: prog.status === "running" ? "running" : prog.status === "completed" ? "completed" : prog.status === "failed" ? "failed" : "idle",
+    cycleNumber: prog.status === "running" || prog.status === "completed" ? 1 : 0,
+    currentStep: prog.step || "—",
+    currentAgent: "loopi",
+    lastResult: prog.message || "—",
+    currentOpportunity: opp || (prog.findings > 0 ? `${prog.findings} issues, ${prog.patches} patches` : "—"),
     pendingCount: pending,
     approvedCount: approved,
     rejectedCount: 0,
     logs: logLines,
+    error: prog.error,
   };
 }
 
@@ -501,9 +504,14 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   function onData(data: string) {
     const char = data.toLowerCase();
 
-    // If showing spec overlay, any key dismisses it
+    // If showing spec overlay, any key dismisses it and starts the pipeline
     if (showingSpec) {
       showingSpec = false;
+      startAutoRefresh();
+      // Auto-start the pipeline in background
+      import("../pipeline-runner.js").then(({ runAutoPipeline }) => {
+        runAutoPipeline().catch(() => {});
+      });
       refresh();
       return;
     }
