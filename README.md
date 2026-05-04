@@ -2,15 +2,16 @@
 
 **Local Autonomous Improvement Agent** — a self-improving bot that continuously steers a codebase toward a strategic vision.
 
-```
-pnpm loopi                → Print pipeline spec for pi agent to execute
-pnpm loopi status         → Show current system state
-pnpm loopi dashboard      → Open the live TUI dashboard
-pnpm loopi approve        → Apply the latest pending diff (merges into dev)
-pnpm loopi reject         → Discard the latest pending diff
-pnpm loopi init           → Initialize the vision document
-pnpm loopi promote        → Merge dev → main (end of session)
-pnpm loopi --target ../.. → Target a sibling repository
+loopi is available as an npm package. Run it in any repository:
+
+```bash
+npx loopi-cli init       # Initialize loopi in the current repo
+npx loopi-cli run        # Print pipeline spec for pi agent to execute
+npx loopi-cli status     # Show current system state
+npx loopi-cli dashboard  # Open the live TUI dashboard
+npx loopi-cli approve    # Apply the latest pending diff (merges into dev)
+npx loopi-cli reject     # Discard the latest pending diff
+npx loopi-cli promote    # Merge dev → main (end of session)
 ```
 
 ## Architecture
@@ -66,38 +67,35 @@ main ─── A ── B ── B'  (promote → main when session is done)
 ```
 
 - All approved patches merge into `dev` via ephemeral feature branches
-- `pnpm loopi promote` merges `dev → main` to finalize a session
+- `loopi-cli promote` merges `dev → main` to finalize a session
 - `main` stays clean until explicitly promoted
+
+## How It Works
+
+1. **Install**: `loopi install` copies 8 agent `.md` files to `~/.pi/agent/agents/` for pi.dev discovery
+2. **Init**: `loopi init` creates `.pi/loopi/` with config and workflow directories
+3. **Run**: `loopi run` prints the pipeline spec — a pi agent reads and executes it
+4. **Approve/Reject**: Each proposed change requires human approval via `contact_supervisor`
+
+The pipeline runs inside your pi coding assistant. The pi agent reads
+`src/pipeline.ts` and executes each step using `subagent()` and `bash`.
 
 ## Getting Started
 
 ```bash
-# Clone the repo
-git clone <repo-url>
-cd loopi
+# Install globally (one time)
+npm install -g loopi-cli
 
-# Install dependencies
-pnpm install
-
-# Build
-pnpm build
-
-# Initialize vision document
-pnpm loopi init
-
-# Check status
-pnpm loopi status
-
-# Open the TUI dashboard
-pnpm loopi dashboard
+# Or run without installing (npx auto-downloads)
+cd your-project
+npx loopi-cli init       # Creates .pi/loopi/ + installs agents globally
+npx loopi-cli status     # Check everything is set up
+npx loopi-cli dashboard  # Open the live dashboard
 ```
-
-The pipeline runs inside your pi coding assistant. The pi agent reads
-`agent/src/pipeline.ts` and executes each step using `subagent()` and `bash`.
 
 ## Configuration
 
-`agent/agent.config.json`:
+`.pi/loopi/config.json` (auto-created by `loopi init`):
 
 ```json
 {
@@ -105,8 +103,8 @@ The pipeline runs inside your pi coding assistant. The pi agent reads
   "runFrequencyMinutes": 30,
   "humanGate": {
     "enabled": true,
-    "requireApproval": true,
-    "notificationMethod": "contact_supervisor"
+    "timeoutMinutes": 60,
+    "autoRejectOnTimeout": true
   },
   "constraints": {
     "maxFilesPerPatch": 3,
@@ -115,6 +113,8 @@ The pipeline runs inside your pi coding assistant. The pi agent reads
   }
 }
 ```
+
+Config is optional — loopi uses sensible defaults if no file exists.
 
 ## Development
 
@@ -129,18 +129,21 @@ pnpm clean       # Remove dist/
 ## Project Structure
 
 ```
-.pi/agents/          → 8 pi.dev agent definitions
-agent/
-├── index.ts         → CLI entry point
-├── agent.config.json→ Configuration
-├── src/
-│   ├── actions/     → Git, config, logger, PR workflow
-│   ├── tui/         → TUI dashboard
-│   ├── types/       → Zod schemas for runtime validation
-│   ├── workers/     → Mechanical helpers (patch generation)
-│   └── pipeline.ts  → Orchestration spec + utility functions
-├── tests/           → Vitest test suite
-└── workflows/       → Pending / approved diffs
+.pi/agents/          → 8 pi.dev agent definitions (self-targeting)
+agents/              → Bundled agent files (for `loopi install`)
+src/
+├── cli.ts           → CLI entry point
+├── pipeline.ts      → Orchestration spec + utility functions
+├── actions/         → Git, config, logger, PR workflow, install, init
+├── tui/             → TUI dashboard
+├── types/           → Zod schemas for runtime validation
+└── workers/         → Mechanical helpers (patch generation)
+tests/               → Vitest test suite
+.pi/loopi/           → Per-repo state (auto-created by `loopi init`)
+  ├── config.json
+  ├── vision.json
+  ├── opportunity-history.json
+  └── workflows/
 ```
 
 ## License

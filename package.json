@@ -1,21 +1,25 @@
 {
-  "name": "loopi",
-  "version": "1.0.0",
-  "description": "Local Autonomous Improvement Agent — self-improving bot for a single code repository",
+  "name": "loopi-cli",
+  "version": "0.0.1",
+  "description": "Local Autonomous Improvement Agent — self-improving bot for any code repository",
   "type": "module",
-  "private": true,
+  "bin": {
+    "loopi": "dist/cli.js",
+    "loopi-cli": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "agents/",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "node --loader ts-node/esm agent/index.ts",
-    "loopi": "node --loader ts-node/esm agent/index.ts",
+    "start": "node dist/cli.js",
     "clean": "rm -rf dist",
-    "agent:run": "node --loader ts-node/esm agent/index.ts",
-    "agent:status": "node --loader ts-node/esm agent/index.ts status",
-    "agent:dashboard": "node --loader ts-node/esm agent/index.ts dashboard",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "prepare": "pnpm build"
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
     "diff": "^5.2.0",

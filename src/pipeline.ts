@@ -12,7 +12,7 @@
  *
  * === PIPELINE STEPS (for the pi agent) ===
  *
- * 1. [init]   vision-agent    — Ensure agent/vision.json exists
+ * 1. [init]   vision-agent    — Ensure .pi/loopi/vision.json exists
  * 2. [cycle]  opportunity-agent — Find opportunities matching vision
  * 3. [cycle]  scout-agent      — Recon on chosen opportunity
  * 4. [cycle]  analysis-agent   — Deep analysis of relevant code
@@ -155,7 +155,7 @@ export function parseAgentData<T>(
  * Read the vision document from disk. Returns null if missing.
  */
 export function readVision(): VisionDocument | null {
-  const path = resolve(process.cwd(), "agent/vision.json");
+  const path = resolve(process.cwd(), ".pi/loopi/vision.json");
   if (!existsSync(path)) return null;
   try {
     const raw = readFileSync(path, "utf-8");
@@ -170,7 +170,7 @@ export function readVision(): VisionDocument | null {
  * Save the vision document to disk.
  */
 export function saveVision(vision: VisionDocument): void {
-  const path = resolve(process.cwd(), "agent/vision.json");
+  const path = resolve(process.cwd(), ".pi/loopi/vision.json");
   writeFileSync(path, JSON.stringify(vision, null, 2), "utf-8");
   logger.info(`Vision saved to: ${path}`);
 }
@@ -182,7 +182,7 @@ export function readOpportunityHistory(): Opportunity[] {
   const cfg = getConfig();
   const path = resolve(
     process.cwd(),
-    cfg.opportunity?.historyFile ?? "agent/opportunity-history.json"
+    cfg.opportunity?.historyFile ?? ".pi/loopi/opportunity-history.json"
   );
   if (!existsSync(path)) return [];
   try {
@@ -202,7 +202,7 @@ export function saveOpportunity(opportunity: Opportunity): void {
   const cfg = getConfig();
   const targetPath = resolve(
     process.cwd(),
-    cfg.opportunity?.historyFile ?? "agent/opportunity-history.json"
+    cfg.opportunity?.historyFile ?? ".pi/loopi/opportunity-history.json"
   );
   const existing = readOpportunityHistory();
   const idx = existing.findIndex((o) => o.id === opportunity.id);
@@ -252,7 +252,7 @@ export async function applyPatch(
   const git = getGit(targetRoot);
 
   // Temporary diff file
-  const diffDir = resolve(targetRoot, "agent/workflows");
+  const diffDir = resolve(targetRoot, ".pi/loopi/workflows");
   if (!existsSync(diffDir)) mkdirSync(diffDir, { recursive: true });
   const diffPath = resolve(diffDir, ".loopi-current.diff");
   writeFileSync(diffPath, diff.replace(/\r/g, ""), "utf-8");
@@ -382,7 +382,7 @@ export function rejectPending(): boolean {
     logger.info("No pending patches to reject.");
     return false;
   }
-  const path = resolve(process.cwd(), "agent/workflows/pending", latest);
+  const path = resolve(process.cwd(), ".pi/loopi/workflows/pending", latest);
   try {
     unlinkSync(path);
     logger.info(`Rejected: ${latest}`);
@@ -457,9 +457,9 @@ export const PIPELINE_SPEC = `
 # loopi Pipeline Specification
 
 ## Step 1: Ensure Vision
-- If agent/vision.json doesn't exist, run:
+- If .pi/loopi/vision.json doesn't exist, run:
   subagent({ agent: "${AGENTS.VISION}", task: "Create vision document for this repo" })
-- Read agent/vision.json and pass it to all downstream agents.
+- Read .pi/loopi/vision.json and pass it to all downstream agents.
 - Validate the output with: parseAgentData(output, VisionSchema, "vision")
 
 ## Step 2: Find Opportunity
@@ -482,7 +482,7 @@ export const PIPELINE_SPEC = `
 
 ## Step 6: Generate Patch
 - If the plan includes fileContents, generate the diff using:
-  bash: ts-node --eval "import { generateDiffString } from './agent/src/workers/patch-generator.js'; console.log(generateDiffString(...))"
+  bash: ts-node --eval "import { generateDiffString } from './src/workers/patch-generator.js'; console.log(generateDiffString(...))"
 - Otherwise, run: subagent({ agent: "${AGENTS.PATCH}", task: JSON.stringify({ plan }) })
 - Validate patch output with: parseAgentData(output, PatchSchema, "patch")
 - Generate the unified diff from the patch-agent's fileContents.
@@ -493,18 +493,18 @@ export const PIPELINE_SPEC = `
 - If not approved (result.approved === false), abort with "patch rejected: <reason>".
 
 ## Step 8: Human Gate
-- Write diff to agent/workflows/pending/ via writePending()
+- Write diff to .pi/loopi/workflows/pending/ via writePending()
 - Use contact_supervisor to show the diff to the user:
   contact_supervisor({
     reason: "need_decision",
-    message: "=== Review this patch ===\\n\\n" + diff + "\\n\\nApprove? Run: pnpm loopi approve  |  Reject? Run: pnpm loopi reject"
+    message: "=== Review this patch ===\\n\\n" + diff + "\\n\\nApprove? Run: loopi approve  |  Reject? Run: loopi reject"
   })
 - Wait for the user's response.
 - If user says 'reject' or 'no': abort with "rejected by user."
 - If user says 'approve' or 'yes': continue.
 
 ## Step 9: Apply (dev-branch workflow)
-- Run: bash: ts-node agent/index.ts approve
+- Run: bash: loopi approve
 - This calls approvePending() which:
   1. Switches to the \`dev\` branch (creating it from \`main\` if needed)
   2. Creates a feature branch \`loopi/<summary>-<timestamp>\` from \`dev\`
@@ -521,5 +521,5 @@ export const PIPELINE_SPEC = `
 
 ## End of Cycle
 - All approved changes accumulate on \`dev\`.
-- At the end of a complete session, promote \`dev → main\` with: pnpm loopi promote
+- At the end of a complete session, promote \`dev → main\` with: loopi promote
 `;

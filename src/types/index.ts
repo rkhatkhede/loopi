@@ -197,7 +197,41 @@ export const ReviewResultSchema = z.object({
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;
 
 // ──────────────────────────────────────────────
-// Config
+// Default config (embedded, no file required)
+// ──────────────────────────────────────────────
+
+export const DEFAULT_CONFIG: Config = {
+  projectName: "loopi",
+  vision: {
+    autoDetectOnMissing: true,
+    askOnInit: true,
+  },
+  opportunity: {
+    maxSuggestionsPerCycle: 3,
+    historyFile: ".pi/loopi/opportunity-history.json",
+  },
+  humanGate: {
+    enabled: true,
+    timeoutMinutes: 60,
+    autoRejectOnTimeout: true,
+  },
+  constraints: {
+    maxFilesPerPatch: 3,
+    maxPatchSizeLines: 500,
+    maxPatchSizeBytes: 10240,
+    allowedOperations: ["refactor", "fix", "improve-tests", "dedupe", "optimize", "typing"],
+    forbiddenDirectories: ["node_modules", "dist", "build", ".git"],
+  },
+  runFrequencyMinutes: 30,
+  git: {
+    commitPrefix: "feat(agent):",
+    branchPrefix: "agent-improvement/",
+    autoPush: false,
+  },
+};
+
+// ──────────────────────────────────────────────
+// Config (Zod schema)
 // ──────────────────────────────────────────────
 
 export const ConfigSchema = z.object({
@@ -211,7 +245,7 @@ export const ConfigSchema = z.object({
   opportunity: z
     .object({
       maxSuggestionsPerCycle: z.number().int().positive().default(3),
-      historyFile: z.string().default("agent/opportunity-history.json"),
+      historyFile: z.string().default(".pi/loopi/opportunity-history.json"),
     })
     .default({}),
   humanGate: z

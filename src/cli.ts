@@ -3,61 +3,65 @@
  * loopi — Local Autonomous Improvement Agent
  *
  * CLI entry point. The improvement pipeline runs inside your
- * pi coding assistant, which reads agent/src/pipeline.ts as
+ * pi coding assistant, which reads src/pipeline.ts as
  * its orchestration specification.
  *
  * Usage:
- *   pnpm loopi run              → Print spec for pi agent to execute
- *   pnpm loopi run --target ..  → Same, targeting sibling repo
- *   pnpm loopi watch            → Continuous improvement mode
- *   pnpm loopi approve          → Apply the latest pending diff
- *   pnpm loopi reject           → Discard the latest pending diff
- *   pnpm loopi status           → Show system status
- *   pnpm loopi dashboard        → Open the TUI dashboard (or: tui)
- *   pnpm loopi init             → Run vision-agent to create vision.json
- *   pnpm loopi promote          → Merge dev → main (end of session)
+ *   loopi run              → Print spec for pi agent to execute
+ *   loopi watch            → Continuous improvement mode
+ *   loopi approve          → Apply the latest pending diff
+ *   loopi reject           → Discard the latest pending diff
+ *   loopi status           → Show system status
+ *   loopi dashboard        → Open the TUI dashboard (or: tui)
+ *   loopi init             → Initialize loopi in the current repo
+ *   loopi install          → Install loopi agents globally
+ *   loopi promote          → Merge dev → main (end of session)
  *
- * Config: agent/agent.config.json
+ * Config: .pi/loopi/config.json (optional)
  */
 import { exit } from "process";
-import { resolve } from "path";
-import { logger } from "./src/actions/logger.js";
-import { loadConfig } from "./src/actions/config.js";
-import { readVision, approvePending, rejectPending, promoteToMain, PIPELINE_SPEC } from "./src/pipeline.js";
-import { listPending } from "./src/actions/pr.js";
-import { runDashboard } from "./src/tui/dashboard.js";
-
-function parseArgs(argv: string[]): { command: string; target?: string } {
-  const args = [...argv];
-  let target: string | undefined;
-
-  // Extract --target <path>
-  const targetIdx = args.indexOf("--target");
-  if (targetIdx >= 0 && targetIdx + 1 < args.length) {
-    target = resolve(process.cwd(), args[targetIdx + 1]!);
-    args.splice(targetIdx, 2);
-  }
-
-  const command = args[0] ?? "run";
-  return { command, target };
-}
+import { logger } from "./actions/logger.js";
+import { loadConfig } from "./actions/config.js";
+import { readVision, approvePending, rejectPending, promoteToMain, PIPELINE_SPEC } from "./pipeline.js";
+import { listPending } from "./actions/pr.js";
+import { runDashboard } from "./tui/dashboard.js";
+import { installAgents } from "./actions/install.js";
+import { initProject } from "./actions/init.js";
+import { showStatus } from "./actions/status.js";
+import pc from "picocolors";
 
 async function main() {
-  const { command, target } = parseArgs(process.argv.slice(2));
+  const command = process.argv[2] ?? "run";
 
-  // If --target was passed, set it as the working directory
-  if (target) {
-    logger.info(`Target repo: ${target}`);
-    process.chdir(target);
+  // Commands that don't need config validation
+  switch (command) {
+    case "install":
+    case "--install": {
+      const count = installAgents();
+      console.log(pc.green(`\n✓ Installed ${count} loopi agents globally`));
+      exit(0);
+    }
+
+    case "init":
+    case "--init": {
+      initProject();
+      exit(0);
+    }
+
+    case "--help":
+    case "help":
+    case "-h": {
+      showHelp();
+      exit(0);
+    }
   }
 
-  // Load config — validates we're in the right directory
+  // Load config — uses defaults if no file exists
   try {
     loadConfig();
   } catch (err) {
     console.error(`Config error: ${err instanceof Error ? err.message : String(err)}`);
-    console.error("Run from project root with agent/agent.config.json present.");
-    console.error("Use --target <path> to point at another repo.");
+    console.error("Run `loopi init` to set up the project.");
     exit(1);
   }
 
@@ -65,7 +69,7 @@ async function main() {
     case "approve":
     case "--apply": {
       logger.info(`Applying latest pending patch...`);
-      const ok = await approvePending(target ?? ".");
+      const ok = await approvePending(".");
       if (!ok && listPending().length === 0) {
         // No pending patches is a clean state, not an error
         exit(0);
@@ -86,21 +90,13 @@ async function main() {
 
     case "status":
     case "--status": {
-      const { showStatus } = await import("./src/actions/status.js");
       showStatus();
       exit(0);
     }
 
-    case "init":
-    case "--init": {
-      console.log(INIT_PROMPT);
-      exit(0);
-    }
-
-    case "--help":
-    case "help":
-    case "-h": {
-      showHelp();
+    case "run":
+    case "--run": {
+      console.log(RUN_PROMPT);
       exit(0);
     }
 
@@ -113,7 +109,7 @@ async function main() {
     case "promote":
     case "--promote": {
       logger.info("Promoting dev → main...");
-      const ok = await promoteToMain(target ?? ".");
+      const ok = await promoteToMain(".");
       exit(ok ? 0 : 1);
     }
 
@@ -142,7 +138,7 @@ function showHelp(): void {
 ╚══════════════════════════════════════════════════════════╝
 
   Usage:
-    pnpm loopi <command>
+    loopi <command>
 
   Commands:
     run           Execute one improvement cycle (default)
@@ -150,19 +146,18 @@ function showHelp(): void {
     dashboard     Open the live TUI dashboard
     approve       Apply the latest pending diff → merges into dev
     reject        Discard the latest pending diff
-    init          (Re)initialize the vision document
+    init          Initialize loopi in the current repo
+    install       Install loopi agents globally for pi.dev
     promote       Merge dev → main (end of session)
     help          Show this message
 
-  Options:
-    --target <path>   Point at a sibling repository
-
   Examples:
-    pnpm loopi status
-    pnpm loopi dashboard
-    pnpm loopi approve
-    pnpm loopi promote
-    pnpm loopi run --target ../some-project
+    npx loopi-cli init
+    npx loopi-cli status
+    npx loopi-cli dashboard
+    npx loopi-cli approve
+    npx loopi-cli promote
+    npx loopi-cli run
 
   Learn more: https://github.com/your-org/loopi
   `);
@@ -188,13 +183,12 @@ ${HEADER}
      specification below using subagent() and bash tools.
 
   Commands:
-    pnpm loopi status          → Show current system state
-    pnpm loopi dashboard       → Open the live TUI dashboard
-    pnpm loopi approve         → Apply the latest pending diff
-    pnpm loopi reject          → Discard the latest pending diff
-    pnpm loopi init            → (Re)initialize the vision document
-    pnpm loopi run --target .. → Target a sibling repository
-    pnpm loopi promote         → Merge dev → main (end of session)
+    loopi status          → Show current system state
+    loopi dashboard       → Open the live TUI dashboard
+    loopi approve         → Apply the latest pending diff
+    loopi reject          → Discard the latest pending diff
+    loopi init            → (Re)initialize loopi
+    loopi promote         → Merge dev → main (end of session)
 
 ${PIPELINE_SPEC}
 `;
@@ -213,20 +207,6 @@ ${HEADER}
   improvements are available, it retries periodically.
 
   Press Ctrl+C to stop the watch loop at any time.
-`;
-
-const INIT_PROMPT = `
-${HEADER}
-
-  📝 Vision initialization
-
-  Tell your pi coding assistant:
-
-     "Run loopi.vision-agent to create the vision document"
-
-  The vision agent will read your repo, ask a few questions about
-  your goals, and create agent/vision.json — the strategic
-  foundation for all future improvement cycles.
 `;
 
 main().catch((err) => {

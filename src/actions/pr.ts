@@ -3,8 +3,8 @@ import { resolve } from "path";
 import type { Patch } from "../types/index.js";
 import { logger } from "./logger.js";
 
-let _pendingDir = resolve(process.cwd(), "agent/workflows/pending");
-let _approvedDir = resolve(process.cwd(), "agent/workflows/approved");
+let _pendingDir = resolve(process.cwd(), ".pi/loopi/workflows/pending");
+let _approvedDir = resolve(process.cwd(), ".pi/loopi/workflows/approved");
 
 /** Override directories for testing */
 export function setPrDirs(pending: string, approved: string): void {

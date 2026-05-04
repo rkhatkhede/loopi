@@ -1,7 +1,7 @@
-#!/usr/bin/env node
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { resolve } from "path";
-import { loadConfig } from "../actions/config.js";
+import { homedir } from "os";
+import { loadConfig } from "./config.js";
 
 export function showStatus() {
   const config = loadConfig();
@@ -16,17 +16,16 @@ export function showStatus() {
   const hasGit = existsSync(gitDir);
   console.log(`  Repository: ${hasGit ? "✓ git initialized" : "✗ no git"}`);
 
-  // Config (now uses the typed Zod-validated config)
-  console.log(`  Config: ✓ loaded`);
+  // Config
+  const configFile = resolve(cwd, ".pi/loopi/config.json");
+  const hasConfig = existsSync(configFile);
+  console.log(`  Config: ${hasConfig ? "✓ loaded from .pi/loopi/config.json" : "✓ defaults (no config file)"}`);
   console.log(`  Project: ${config.projectName}`);
   console.log(`  Run frequency: every ${config.runFrequencyMinutes} min`);
-  if (config.targetRepo?.path) {
-    console.log(`  Target repo: ${config.targetRepo.path}`);
-  }
 
   // Workflow counts
-  const pendingDir = resolve(cwd, "agent/workflows/pending");
-  const approvedDir = resolve(cwd, "agent/workflows/approved");
+  const pendingDir = resolve(cwd, ".pi/loopi/workflows/pending");
+  const approvedDir = resolve(cwd, ".pi/loopi/workflows/approved");
 
   let pendingCount = 0;
   let approvedCount = 0;
@@ -43,7 +42,7 @@ export function showStatus() {
   console.log(`  Approved: ${approvedCount} diff(s)`);
 
   // Logs
-  const logDir = resolve(cwd, "agent/logs");
+  const logDir = resolve(cwd, ".pi/loopi/logs");
   if (existsSync(logDir)) {
     const logs = readdirSync(logDir)
       .filter((f) => f.endsWith(".log"))
@@ -62,47 +61,29 @@ export function showStatus() {
     }
   }
 
-  // Agent definitions
-  const agentsDir = resolve(cwd, ".pi/agents");
-  if (existsSync(agentsDir)) {
-    const agents = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
-    console.log(`\n  ─── pi.dev Agents ───`);
+  // Agent definitions (global first, fallback to local)
+  const globalAgentsDir = resolve(homedir(), ".pi/agent/agents");
+  const localAgentsDir = resolve(cwd, ".pi/agents");
+
+  if (existsSync(globalAgentsDir)) {
+    const agents = readdirSync(globalAgentsDir).filter((f) => f.endsWith(".md"));
+    console.log(`\n  ─── Global Agents (global install) ───`);
     for (const agent of agents) {
-      const content = readFileSync(resolve(agentsDir, agent), "utf-8");
+      const content = readFileSync(resolve(globalAgentsDir, agent), "utf-8");
       const desc = content.match(/description: (.+)/)?.[1] ?? "";
       console.log(`  • ${agent.replace(".md", "")}: ${desc}`);
     }
   }
 
-  // Source count
-  const totalFiles = readdirRecursive(resolve(cwd, "agent"), ".ts");
-  console.log(`\n  ─── Source ───`);
-  console.log(`  TypeScript files: ${totalFiles}`);
+  if (existsSync(localAgentsDir)) {
+    const agents = readdirSync(localAgentsDir).filter((f) => f.endsWith(".md"));
+    console.log(`\n  ─── Project Agents (.pi/agents/) ───`);
+    for (const agent of agents) {
+      const content = readFileSync(resolve(localAgentsDir, agent), "utf-8");
+      const desc = content.match(/description: (.+)/)?.[1] ?? "";
+      console.log(`  • ${agent.replace(".md", "")}: ${desc}`);
+    }
+  }
 
   console.log();
-}
-
-function readdirRecursive(dir: string, ext: string): number {
-  if (!existsSync(dir)) return 0;
-  let count = 0;
-  try {
-    const entries = readdirSync(dir);
-    for (const entry of entries) {
-      const full = resolve(dir, entry);
-      if (statSync(full).isDirectory()) {
-        count += readdirRecursive(full, ext);
-      } else if (entry.endsWith(ext)) {
-        count++;
-      }
-    }
-  } catch {
-    // skip
-  }
-  return count;
-}
-
-// Allow direct CLI execution
-const isMainModule = process.argv[1]?.endsWith("status.ts") || process.argv[1]?.endsWith("status.js");
-if (isMainModule) {
-  showStatus();
 }

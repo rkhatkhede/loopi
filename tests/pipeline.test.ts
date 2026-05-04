@@ -44,9 +44,9 @@ const AGENT_CFG = {
 
 function withTestDir(fn: (dir: string) => void) {
   const tmp = resolve(tmpdir(), "loopi-" + Math.random().toString(36).slice(2));
-  const agentDir = resolve(tmp, "agent");
-  mkdirSync(agentDir, { recursive: true });
-  writeFileSync(resolve(agentDir, "agent.config.json"), JSON.stringify(AGENT_CFG), "utf-8");
+  const configDir = resolve(tmp, ".pi/loopi");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(resolve(configDir, "config.json"), JSON.stringify(AGENT_CFG), "utf-8");
   fn(tmp);
   try { rmSync(tmp, { recursive: true, force: true }); } catch {}
 }
@@ -130,8 +130,8 @@ describe("readVision / saveVision", () => {
   beforeEach(async () => {
     originalCwd = process.cwd();
     tmp = resolve(tmpdir(), "loopi-vision-" + Math.random().toString(36).slice(2));
-    mkdirSync(resolve(tmp, "agent"), { recursive: true });
-    writeFileSync(resolve(tmp, "agent/agent.config.json"), JSON.stringify(AGENT_CFG), "utf-8");
+    mkdirSync(resolve(tmp, ".pi/loopi"), { recursive: true });
+    writeFileSync(resolve(tmp, ".pi/loopi/config.json"), JSON.stringify(AGENT_CFG), "utf-8");
     process.chdir(tmp);
     vi.resetModules();
     pipeline = await import("../src/pipeline.js");
@@ -169,8 +169,8 @@ describe("opportunity history", () => {
   beforeEach(async () => {
     originalCwd = process.cwd();
     tmp = resolve(tmpdir(), "loopi-opp-" + Math.random().toString(36).slice(2));
-    mkdirSync(resolve(tmp, "agent"), { recursive: true });
-    writeFileSync(resolve(tmp, "agent/agent.config.json"), JSON.stringify(AGENT_CFG), "utf-8");
+    mkdirSync(resolve(tmp, ".pi/loopi"), { recursive: true });
+    writeFileSync(resolve(tmp, ".pi/loopi/config.json"), JSON.stringify(AGENT_CFG), "utf-8");
     process.chdir(tmp);
     vi.resetModules();
     pipeline = await import("../src/pipeline.js");
@@ -208,8 +208,8 @@ describe("writePending / getLatestPending", () => {
   beforeEach(async () => {
     originalCwd = process.cwd();
     tmp = resolve(tmpdir(), "loopi-pr-" + Math.random().toString(36).slice(2));
-    mkdirSync(resolve(tmp, "agent"), { recursive: true });
-    writeFileSync(resolve(tmp, "agent/agent.config.json"), JSON.stringify(AGENT_CFG), "utf-8");
+    mkdirSync(resolve(tmp, ".pi/loopi"), { recursive: true });
+    writeFileSync(resolve(tmp, ".pi/loopi/config.json"), JSON.stringify(AGENT_CFG), "utf-8");
     process.chdir(tmp);
     vi.resetModules();
     pipeline = await import("../src/pipeline.js");

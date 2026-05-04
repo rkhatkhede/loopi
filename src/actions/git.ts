@@ -1,5 +1,7 @@
-import simpleGit from "simple-git";
-import type { SimpleGit } from "simple-git";
+import simpleGitPkg from "simple-git";
+import type { SimpleGit, SimpleGitFactory } from "simple-git";
+
+const simpleGit: SimpleGitFactory = (simpleGitPkg as unknown as SimpleGitFactory);
 import { existsSync } from "fs";
 import { resolve } from "path";
 import { logger } from "./logger.js";

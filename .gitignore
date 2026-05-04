@@ -2,9 +2,13 @@ node_modules/
 dist/
 build/
 .piloop-current.diff
-agent/workflows/pending/*.diff
-agent/workflows/approved/*.diff
-agent/logs/
+
+# loopi per-repo state (auto-generated)
+.pi/loopi/workflows/
+.pi/loopi/logs/
+.pi/loopi/vision.json
+.pi/loopi/opportunity-history.json
+
 *.tsbuildinfo
 .env
 .env.local

@@ -29,7 +29,7 @@ export function setLogLevel(level: LogLevel): void {
 }
 
 function getLogDir(): string {
-  return resolve(process.cwd(), "agent/logs");
+  return resolve(process.cwd(), ".pi/loopi/logs");
 }
 
 function ensureLogDir(): void {

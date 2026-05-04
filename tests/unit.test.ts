@@ -14,21 +14,21 @@ describe("config", () => {
 
   beforeEach(() => {
     tmp = resolve(tmpdir(), "loopi-test-config-" + Math.random().toString(36).slice(2));
-    mkdirSync(resolve(tmp, "agent"), { recursive: true });
+    mkdirSync(resolve(tmp, ".pi/loopi"), { recursive: true });
   });
 
   afterEach(() => {
-    try { rmSync(resolve(tmp, "agent"), { recursive: true, force: true }); } catch { /* ok */ }
+    try { rmSync(resolve(tmp, ".pi"), { recursive: true, force: true }); } catch { /* ok */ }
   });
 
   it("loads and validates a minimal config", () => {
     resetConfig();
     writeFileSync(
-      resolve(tmp, "agent/agent.config.json"),
+      resolve(tmp, ".pi/loopi/config.json"),
       JSON.stringify({ projectName: "test-project" }),
       "utf-8"
     );
-    const config = loadConfig(resolve(tmp, "agent/agent.config.json"));
+    const config = loadConfig(resolve(tmp, ".pi/loopi/config.json"));
     expect(config.projectName).toBe("test-project");
     expect(config.runFrequencyMinutes).toBe(30);
     expect(config.humanGate.enabled).toBe(true);
@@ -38,43 +38,48 @@ describe("config", () => {
   it("loads and validates a full config", () => {
     resetConfig();
     writeFileSync(
-      resolve(tmp, "agent/agent.config.json"),
+      resolve(tmp, ".pi/loopi/config.json"),
       JSON.stringify({
         projectName: "my-project",
         runFrequencyMinutes: 60,
         humanGate: { enabled: true, requireApproval: true, notificationMethod: "contact_supervisor" },
         constraints: { maxFilesPerPatch: 5, maxPatchSizeLines: 1000, maxPatchSizeBytes: 20480 },
-        targetRepo: { path: "../target" },
       }),
       "utf-8"
     );
-    const config = loadConfig(resolve(tmp, "agent/agent.config.json"));
+    const config = loadConfig(resolve(tmp, ".pi/loopi/config.json"));
     expect(config.projectName).toBe("my-project");
     expect(config.runFrequencyMinutes).toBe(60);
     expect(config.constraints.maxFilesPerPatch).toBe(5);
-    expect(config.targetRepo?.path).toBe("../target");
   });
 
   it("throws on invalid config (wrong field type)", () => {
     resetConfig();
     writeFileSync(
-      resolve(tmp, "agent/agent.config.json"),
+      resolve(tmp, ".pi/loopi/config.json"),
       JSON.stringify({ projectName: 123 }),
       "utf-8"
     );
-    expect(() => loadConfig(resolve(tmp, "agent/agent.config.json"))).toThrow();
+    expect(() => loadConfig(resolve(tmp, ".pi/loopi/config.json"))).toThrow();
   });
 
   it("getConfig returns cached config after loadConfig", () => {
     resetConfig();
     writeFileSync(
-      resolve(tmp, "agent/agent.config.json"),
+      resolve(tmp, ".pi/loopi/config.json"),
       JSON.stringify({ projectName: "cached-test" }),
       "utf-8"
     );
-    const config = loadConfig(resolve(tmp, "agent/agent.config.json"));
+    const config = loadConfig(resolve(tmp, ".pi/loopi/config.json"));
     expect(config.projectName).toBe("cached-test");
     expect(getConfig().projectName).toBe("cached-test");
+  });
+
+  it("returns defaults when no config file exists", () => {
+    resetConfig();
+    const config = loadConfig(resolve(tmp, ".pi/loopi/nonexistent.json"));
+    expect(config.projectName).toBe("loopi");
+    expect(config.runFrequencyMinutes).toBe(30);
   });
 });
 
@@ -85,17 +90,17 @@ describe("PR workflow", () => {
 
   beforeEach(() => {
     tmp = resolve(tmpdir(), "loopi-test-pr-" + Math.random().toString(36).slice(2));
-    mkdirSync(resolve(tmp, "agent/workflows/pending"), { recursive: true });
-    mkdirSync(resolve(tmp, "agent/workflows/approved"), { recursive: true });
+    mkdirSync(resolve(tmp, ".pi/loopi/workflows/pending"), { recursive: true });
+    mkdirSync(resolve(tmp, ".pi/loopi/workflows/approved"), { recursive: true });
   });
 
   afterEach(() => {
-    try { rmSync(resolve(tmp, "agent"), { recursive: true, force: true }); } catch { /* ok */ }
+    try { rmSync(resolve(tmp, ".pi"), { recursive: true, force: true }); } catch { /* ok */ }
   });
 
   it("writePendingPR creates a file and listPending finds it", async () => {
     const { writePendingPR, listPending, setPrDirs } = await import("../src/actions/pr.js");
-    setPrDirs(resolve(tmp, "agent/workflows/pending"), resolve(tmp, "agent/workflows/approved"));
+    setPrDirs(resolve(tmp, ".pi/loopi/workflows/pending"), resolve(tmp, ".pi/loopi/workflows/approved"));
     const patch = {
       id: "test-roundtrip",
       diff: "--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-old\n+new\n",
@@ -112,7 +117,7 @@ describe("PR workflow", () => {
   it("moveToApproved moves a file from pending to approved", async () => {
     const { writePendingPR, listPending, listApproved, moveToApproved, setPrDirs } =
       await import("../src/actions/pr.js");
-    setPrDirs(resolve(tmp, "agent/workflows/pending"), resolve(tmp, "agent/workflows/approved"));
+    setPrDirs(resolve(tmp, ".pi/loopi/workflows/pending"), resolve(tmp, ".pi/loopi/workflows/approved"));
     const patch = {
       id: "move-test",
       diff: "--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-old\n+new\n",
@@ -131,7 +136,7 @@ describe("PR workflow", () => {
 
   it("readDiffFile strips metadata and returns clean diff with trailing newline", async () => {
     const { readDiffFile, writePendingPR, setPrDirs } = await import("../src/actions/pr.js");
-    setPrDirs(resolve(tmp, "agent/workflows/pending"), resolve(tmp, "agent/workflows/approved"));
+    setPrDirs(resolve(tmp, ".pi/loopi/workflows/pending"), resolve(tmp, ".pi/loopi/workflows/approved"));
     const patch = {
       id: "read-test",
       diff: "--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-old\n+new\n",

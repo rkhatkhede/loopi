@@ -4,7 +4,7 @@
  * A real-time terminal dashboard showing the system overview.
  * Uses ANSI escape codes and picocolors — zero additional dependencies.
  *
- * Launched via: pnpm loopi dashboard
+ * Launched via: loopi dashboard
  *
  * Controls:
  *   q        — Quit dashboard
@@ -100,7 +100,7 @@ function collectState(layout: Layout): DashboardState {
   const logLines: string[] = [];
 
   // Read log file
-  const logDir = resolve(cwd, "agent/logs");
+  const logDir = resolve(cwd, ".pi/loopi/logs");
   if (existsSync(logDir)) {
     const files = readdirSync(logDir)
       .filter((f) => f.endsWith(".log"))
@@ -312,19 +312,13 @@ export type DashboardCallback = (action: DashboardAction) => void;
 export async function runDashboard(onAction?: DashboardCallback): Promise<void> {
   const cwd = process.cwd();
 
-  // Verify we're in a valid project
-  if (!existsSync(resolve(cwd, "agent/agent.config.json"))) {
-    console.error(pc.red("Not in a loopi project. Run from project root."));
-    process.exit(1);
-  }
-
   // Set up terminal
   const stdout = process.stdout;
   const stdin = process.stdin;
 
   if (!stdout.isTTY || !stdin.isTTY) {
     console.error(pc.yellow("Dashboard requires a TTY terminal."));
-    console.error("Try: pnpm loopi status");
+    console.error("Try: loopi status");
     process.exit(1);
   }
 
