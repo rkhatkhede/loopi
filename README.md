@@ -5,13 +5,13 @@
 loopi is available as a pnpm package. Run it in any repository:
 
 ```bash
-pnpx @loopi-cli/loopi init       # Initialize loopi in the current repo
-pnpx @loopi-cli/loopi run        # Print pipeline spec for pi agent to execute
-pnpx @loopi-cli/loopi status     # Show current system state
-pnpx @loopi-cli/loopi dashboard  # Open the live TUI dashboard
-pnpx @loopi-cli/loopi approve    # Apply the latest pending diff (merges into dev)
-pnpx @loopi-cli/loopi reject     # Discard the latest pending diff
-pnpx @loopi-cli/loopi promote    # Merge dev → main (end of session)
+pnpx @rkhatkhede/loopi init       # Initialize loopi in the current repo
+pnpx @rkhatkhede/loopi run        # Print pipeline spec for pi agent to execute
+pnpx @rkhatkhede/loopi status     # Show current system state
+pnpx @rkhatkhede/loopi dashboard  # Open the live TUI dashboard
+pnpx @rkhatkhede/loopi approve    # Apply the latest pending diff (merges into dev)
+pnpx @rkhatkhede/loopi reject     # Discard the latest pending diff
+pnpx @rkhatkhede/loopi promote    # Merge dev → main (end of session)
 ```
 
 ## Architecture
@@ -84,13 +84,13 @@ The pipeline runs inside your pi coding assistant. The pi agent reads
 
 ```bash
 # Install globally (one time)
-pnpm install -g @loopi-cli/loopi
+pnpm install -g @rkhatkhede/loopi
 
 # Or run without installing (pnpx auto-downloads)
 cd your-project
-pnpx @loopi-cli/loopi init       # Creates .pi/loopi/ + installs agents globally
-pnpx @loopi-cli/loopi status     # Check everything is set up
-pnpx @loopi-cli/loopi dashboard  # Open the live dashboard
+pnpx @rkhatkhede/loopi init       # Creates .pi/loopi/ + installs agents globally
+pnpx @rkhatkhede/loopi status     # Check everything is set up
+pnpx @rkhatkhede/loopi dashboard  # Open the live dashboard
 ```
 
 ## Configuration

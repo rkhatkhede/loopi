@@ -1,11 +1,10 @@
 {
-  "name": "@loopi-cli/loopi",
+  "name": "@rkhatkhede/loopi",
   "version": "0.0.1",
   "description": "Local Autonomous Improvement Agent — self-improving bot for any code repository",
   "type": "module",
   "bin": {
-    "loopi": "dist/cli.js",
-    "loopi-cli": "dist/cli.js"
+    "loopi": "dist/cli.js"
   },
   "files": [
     "dist/",

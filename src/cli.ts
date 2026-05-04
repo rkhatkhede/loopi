@@ -152,12 +152,12 @@ function showHelp(): void {
     help          Show this message
 
   Examples:
-    pnpx @loopi-cli/loopi init
-    pnpx @loopi-cli/loopi status
-    pnpx @loopi-cli/loopi dashboard
-    pnpx @loopi-cli/loopi approve
-    pnpx @loopi-cli/loopi promote
-    pnpx @loopi-cli/loopi run
+    pnpx @rkhatkhede/loopi init
+    pnpx @rkhatkhede/loopi status
+    pnpx @rkhatkhede/loopi dashboard
+    pnpx @rkhatkhede/loopi approve
+    pnpx @rkhatkhede/loopi promote
+    pnpx @rkhatkhede/loopi run
 
   Learn more: https://github.com/rkhatkhede/loopi
   `);
