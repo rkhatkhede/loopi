@@ -1,5 +1,18 @@
 {
-  "projectName": "piloop",
+  "projectName": "loopi",
+  "vision": {
+    "autoDetectOnMissing": true,
+    "askOnInit": true
+  },
+  "opportunity": {
+    "maxSuggestionsPerCycle": 3,
+    "historyFile": "agent/opportunity-history.json"
+  },
+  "humanGate": {
+    "enabled": true,
+    "timeoutMinutes": 60,
+    "autoRejectOnTimeout": true
+  },
   "constraints": {
     "maxFilesPerPatch": 3,
     "maxPatchSizeLines": 500,
@@ -12,42 +25,14 @@
       "optimize",
       "typing"
     ],
-    "forbiddenDirectories": ["node_modules", "dist", "build", ".git"],
-    "maxFilesPerAnalysis": 300,
-    "minComplexityThreshold": 10,
-    "staleFileDays": 30,
-    "largeFileLines": 500
+    "forbiddenDirectories": [
+      "node_modules",
+      "dist",
+      "build",
+      ".git"
+    ]
   },
-  "goals": [
-    "reduce complexity",
-    "improve maintainability",
-    "fix recurring errors",
-    "improve type safety",
-    "increase test coverage",
-    "remove dead code",
-    "improve error handling"
-  ],
   "runFrequencyMinutes": 30,
-  "signals": {
-    "enabled": {
-      "gitModified": true,
-      "gitUntracked": true,
-      "errorLog": true,
-      "testsFailing": true,
-      "todoPresent": true,
-      "codeSmell": true,
-      "staleFile": true,
-      "largeFile": true,
-      "complexityThreshold": true
-    },
-    "todoPatterns": ["TODO", "FIXME", "HACK", "XXX", "WORKAROUND"],
-    "errorLogPath": "./logs/errors.log"
-  },
-  "review": {
-    "requireHumanApproval": false,
-    "autoApproveIfTestsPass": true,
-    "maxRiskLevel": "medium"
-  },
   "git": {
     "commitPrefix": "feat(agent):",
     "branchPrefix": "agent-improvement/",

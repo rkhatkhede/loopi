@@ -6,15 +6,77 @@ import { logger } from "./logger.js";
 
 let _git: SimpleGit | null = null;
 
-export function getGit(): SimpleGit {
+export function getGit(cwd?: string): SimpleGit {
   if (!_git) {
-    const cwd = process.cwd();
-    if (!existsSync(resolve(cwd, ".git"))) {
+    const dir = cwd ?? process.cwd();
+    if (!existsSync(resolve(dir, ".git"))) {
       throw new Error("Not a git repository. Run `git init` first.");
     }
-    _git = simpleGit(cwd);
+    _git = simpleGit(dir);
   }
   return _git;
+}
+
+/** Reset the cached git instance (e.g. after cwd change) */
+export function resetGit(): void {
+  _git = null;
+}
+
+export async function getCurrentBranch(): Promise<string> {
+  const git = getGit();
+  const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
+  return branch.trim();
+}
+
+export async function checkoutBranch(branchName: string): Promise<void> {
+  const git = getGit();
+  await git.checkout(branchName);
+  logger.info(`Switched to branch: ${branchName}`);
+}
+
+export async function ensureBranch(branchName: string): Promise<void> {
+  const git = getGit();
+  const branches = await git.branchLocal();
+  if (branches.all.includes(branchName)) {
+    await git.checkout(branchName);
+    logger.info(`Checked out existing branch: ${branchName}`);
+  } else {
+    await git.checkoutLocalBranch(branchName);
+    logger.info(`Created and switched to branch: ${branchName}`);
+  }
+}
+
+export async function mergeBranch(sourceBranch: string, message?: string): Promise<void> {
+  const git = getGit();
+  const target = await getCurrentBranch();
+  const msg = message ?? `Merge ${sourceBranch} into ${target}`;
+  await git.raw(["merge", "--ff-only", "-m", msg, sourceBranch]);
+  logger.info(`Merged ${sourceBranch} → ${target}`);
+}
+
+export async function deleteBranch(branchName: string): Promise<void> {
+  const git = getGit();
+  await git.branch(["-d", branchName]);
+  logger.info(`Deleted branch: ${branchName}`);
+}
+
+export async function stashChanges(): Promise<boolean> {
+  const git = getGit();
+  const status = await git.status();
+  if (status.files.length === 0) return false;
+  await git.stash();
+  logger.info("Stashed uncommitted changes");
+  return true;
+}
+
+export async function stashPop(): Promise<void> {
+  const git = getGit();
+  try {
+    await git.stash(["pop"]);
+    logger.info("Restored stashed changes");
+  } catch {
+    // No stash to pop — fine
+  }
 }
 
 export async function getModifiedFiles(): Promise<string[]> {

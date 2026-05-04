@@ -1,198 +1,286 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { analyzeFile } from "../src/analyzers/analyzer.js";
-import { planImprovement } from "../src/planners/planner.js";
-import { generateDiffString, generatePatch } from "../src/workers/patch-generator.js";
-import { reviewPatchLocally } from "../src/reviewers/reviewer.js";
-import { loadConfig, getConfig } from "../src/actions/config.js";
-import type { AnalysisReport, Signal, Patch, ImprovementPlan } from "../src/types/index.js";
-import { writeFileSync, mkdirSync } from "fs";
+/**
+ * Tests for the critical loopi utility functions.
+ *
+ * Run with: pnpm test
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "fs";
 import { resolve } from "path";
 import { tmpdir } from "os";
-import { randomUUID } from "crypto";
 
-// Helper to create a temp dir for test files
-function createTempFile(content: string, ext = ".ts"): string {
-  const dir = resolve(tmpdir(), "piloop-test", randomUUID());
-  mkdirSync(dir, { recursive: true });
-  const filePath = resolve(dir, `test${ext}`);
-  writeFileSync(filePath, content, "utf-8");
-  return filePath;
+import type { VisionDocument, Opportunity, Patch } from "../src/types/index.js";
+
+function makeVision(overrides: Partial<VisionDocument> = {}): VisionDocument {
+  return {
+    version: 1,
+    projectDescription: "A test project",
+    businessGoals: ["test goal"],
+    technicalPriorities: [],
+    userPersonas: [],
+    constraints: [],
+    ...overrides,
+  };
 }
 
-describe("Config", () => {
-  it("should load config from default path", () => {
-    const config = loadConfig(resolve(process.cwd(), "agent/agent.config.json"));
-    expect(config.projectName).toBe("piloop");
-    expect(config.constraints.maxFilesPerPatch).toBe(3);
-    expect(config.constraints.allowedOperations).toContain("refactor");
+function makeOpportunity(overrides: Partial<Opportunity> = {}): Opportunity {
+  return {
+    id: "550e8400-e29b-41d4-a716-446655440000",
+    createdAt: Date.now(),
+    title: "Test opportunity",
+    description: "A test opportunity description",
+    category: "feature",
+    estimatedValue: "medium",
+    estimatedEffort: "small",
+    affectedAreas: ["src/"],
+    status: "suggested",
+    ...overrides,
+  };
+}
+
+const AGENT_CFG = {
+  projectName: "test-project",
+  runFrequencyMinutes: 30,
+};
+
+function withTestDir(fn: (dir: string) => void) {
+  const tmp = resolve(tmpdir(), "loopi-" + Math.random().toString(36).slice(2));
+  const agentDir = resolve(tmp, "agent");
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(resolve(agentDir, "agent.config.json"), JSON.stringify(AGENT_CFG), "utf-8");
+  fn(tmp);
+  try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+}
+
+// ─── Tests ───
+
+describe("parseAgentOutput", () => {
+  let pipeline: typeof import("../src/pipeline.js");
+  let z: typeof import("zod/v3");
+
+  beforeEach(async () => {
+    vi.resetModules();
+    pipeline = await import("../src/pipeline.js");
+    z = await import("zod/v3");
+  });
+
+  it("extracts JSON from fenced block", () => {
+    const output = `Analysis:
+
+\`\`\`json
+{
+  "type": "analysis",
+  "data": { "summary": "test", "findings": [], "smells": [], "healthScore": 50, "recommendations": [], "criticalBlockers": [] }
+}
+\`\`\`
+
+Done.`;
+    const result = pipeline.parseAgentData(
+      output,
+      z.object({
+        summary: z.string(),
+        findings: z.array(z.string()),
+        smells: z.array(z.any()),
+        healthScore: z.number(),
+        recommendations: z.array(z.string()),
+        criticalBlockers: z.array(z.string()),
+      }),
+      "analysis"
+    );
+    expect(result.summary).toBe("test");
+    expect(result.healthScore).toBe(50);
+  });
+
+  it("parses plain JSON output without fences", () => {
+    const output = JSON.stringify({
+      type: "vision",
+      data: makeVision({ projectDescription: "A test project", northStar: "Test north star" }),
+    });
+    const result = pipeline.parseAgentData(
+      output,
+      z.object({
+        projectDescription: z.string(),
+        businessGoals: z.array(z.string()),
+        northStar: z.string().optional(),
+      }),
+      "vision"
+    );
+    expect(result.projectDescription).toBe("A test project");
+    expect(result.northStar).toBe("Test north star");
+  });
+
+  it("throws on invalid schema", () => {
+    const output = "```json\n{ \"type\": \"test\", \"data\": { \"name\": \"hello\" } }\n```";
+    expect(() =>
+      pipeline.parseAgentData(output, z.object({ requiredField: z.string() }), "test")
+    ).toThrow();
+  });
+
+  it("throws on no JSON found", () => {
+    expect(() =>
+      pipeline.parseAgentOutput("This is just plain text with no JSON", z.any())
+    ).toThrow(/no valid JSON/);
   });
 });
 
-describe("Analyzer", () => {
-  it("should detect TODO comments", () => {
-    const file = createTempFile(`
-      // TODO: implement this
-      const x = 1;
-      // FIXME: this is broken
-      const y = 2;
-    `);
+describe("readVision / saveVision", () => {
+  let pipeline: typeof import("../src/pipeline.js");
+  let originalCwd: string;
+  let tmp: string;
 
-    const result = analyzeFile(file);
-    expect(result.todos).toHaveLength(2);
-    expect(result.todos[0]?.pattern).toBe("TODO");
-    expect(result.todos[1]?.pattern).toBe("FIXME");
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    tmp = resolve(tmpdir(), "loopi-vision-" + Math.random().toString(36).slice(2));
+    mkdirSync(resolve(tmp, "agent"), { recursive: true });
+    writeFileSync(resolve(tmp, "agent/agent.config.json"), JSON.stringify(AGENT_CFG), "utf-8");
+    process.chdir(tmp);
+    vi.resetModules();
+    pipeline = await import("../src/pipeline.js");
   });
 
-  it("should detect long lines", () => {
-    const file = createTempFile(`
-      const shortLine = 1;
-      ${"a".repeat(200)}
-    `);
-
-    const result = analyzeFile(file);
-    const longLineSmells = result.smells.filter((s) => s.type === "long-line");
-    expect(longLineSmells.length).toBeGreaterThan(0);
+  afterEach(() => {
+    process.chdir(originalCwd);
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
   });
 
-  it("should detect excessive any usage", () => {
-    const file = createTempFile(`
-      function foo(a: any, b: any, c: any, d: any, e: any, f: any): void {
-        return;
-      }
-    `);
-
-    const result = analyzeFile(file);
-    const anyErrors = result.errors.filter((e) => e.pattern === "excessive-any");
-    expect(anyErrors.length).toBeGreaterThan(0);
+  it("returns null when no vision file exists", () => {
+    expect(pipeline.readVision()).toBeNull();
   });
 
-  it("should analyze codebase and produce report", async () => {
-    const file = createTempFile(`const x: number = 1;`);
-    const { analyzeCodebase } = await import("../src/analyzers/analyzer.js");
+  it("saves and reads back a vision document", () => {
+    pipeline.saveVision(makeVision({ projectDescription: "My test project", northStar: "Be the best" }));
+    const loaded = pipeline.readVision();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.projectDescription).toBe("My test project");
+    expect(loaded!.northStar).toBe("Be the best");
+  });
 
-    const result = analyzeFile(file);
-    expect(typeof result.lines).toBe("number");
-    expect(result.smells).toBeDefined();
-    expect(result.todos).toBeDefined();
+  it("overwrites existing vision on save", () => {
+    pipeline.saveVision(makeVision({ projectDescription: "v1", version: 1 }));
+    pipeline.saveVision(makeVision({ projectDescription: "v2", version: 2 }));
+    expect(pipeline.readVision()!.projectDescription).toBe("v2");
   });
 });
 
-describe("Planner", () => {
-  it("should plan improvements from analysis with complex functions", () => {
-    const analysis: AnalysisReport = {
-      timestamp: Date.now(),
-      signals: [],
-      filesAnalyzed: ["test.ts"],
-      smells: [],
-      todos: [],
-      complexity: [
-        {
-          file: "test.ts",
-          functionName: "complexFn",
-          line: 1,
-          complexity: 25,
-          risk: "high",
-        },
-      ],
-      errors: [],
-      healthScore: 50,
-      summary: "Test analysis",
-    };
+describe("opportunity history", () => {
+  let pipeline: typeof import("../src/pipeline.js");
+  let originalCwd: string;
+  let tmp: string;
 
-    const plan = planImprovement(analysis);
-    expect(plan.operation).toBe("refactor");
-    expect(plan.risk).toBe("low");
-    expect(plan.affectedFiles).toContain("test.ts");
-    expect(plan.summary).toContain("complexFn");
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    tmp = resolve(tmpdir(), "loopi-opp-" + Math.random().toString(36).slice(2));
+    mkdirSync(resolve(tmp, "agent"), { recursive: true });
+    writeFileSync(resolve(tmp, "agent/agent.config.json"), JSON.stringify(AGENT_CFG), "utf-8");
+    process.chdir(tmp);
+    vi.resetModules();
+    pipeline = await import("../src/pipeline.js");
   });
 
-  it("should throw on empty analysis", () => {
-    const analysis: AnalysisReport = {
-      timestamp: Date.now(),
-      signals: [],
-      filesAnalyzed: [],
-      smells: [],
-      todos: [],
-      complexity: [],
-      errors: [],
-      healthScore: 100,
-      summary: "Clean analysis",
-    };
+  afterEach(() => {
+    process.chdir(originalCwd);
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+  });
 
-    expect(() => planImprovement(analysis)).toThrow("No actionable improvements");
+  it("returns empty array when no history exists", () => {
+    expect(pipeline.readOpportunityHistory()).toEqual([]);
+  });
+
+  it("saves and reads back opportunities", () => {
+    pipeline.saveOpportunity(makeOpportunity({ title: "Add login feature" }));
+    expect(pipeline.readOpportunityHistory()).toHaveLength(1);
+  });
+
+  it("updates existing opportunity by id", () => {
+    const id = "550e8400-e29b-41d4-a716-446655440000";
+    pipeline.saveOpportunity(makeOpportunity({ id, title: "Original", status: "suggested" }));
+    pipeline.saveOpportunity(makeOpportunity({ id, title: "Updated", status: "accepted" }));
+    const history = pipeline.readOpportunityHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0]!.title).toBe("Updated");
   });
 });
 
-describe("Patch Generator", () => {
-  it("should generate diff string for changed content", () => {
-    const file = createTempFile("line1\nline2\nline3\nline4\nline5\n");
-    const newContent = "line1\nline2\nmodified\nline4\nline5\n";
+describe("writePending / getLatestPending", () => {
+  let pipeline: typeof import("../src/pipeline.js");
+  let originalCwd: string;
+  let tmp: string;
 
-    const diff = generateDiffString(file, newContent);
-    expect(diff).toContain("--- a");
-    expect(diff).toContain("+++ b");
-    expect(diff).toContain("@@");
-    expect(diff).toContain("-line3");
-    expect(diff).toContain("+modified");
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    tmp = resolve(tmpdir(), "loopi-pr-" + Math.random().toString(36).slice(2));
+    mkdirSync(resolve(tmp, "agent"), { recursive: true });
+    writeFileSync(resolve(tmp, "agent/agent.config.json"), JSON.stringify(AGENT_CFG), "utf-8");
+    process.chdir(tmp);
+    vi.resetModules();
+    pipeline = await import("../src/pipeline.js");
   });
-});
 
-describe("Reviewer", () => {
-  it("should approve clean patches", () => {
+  afterEach(() => {
+    process.chdir(originalCwd);
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+  });
+
+  it("writes a pending diff and retrieves it", () => {
     const patch: Patch = {
-      id: "test-123",
-      planId: "plan-123",
-      diff: "--- a/test.ts\n+++ b/test.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n",
-      timestamp: Date.now(),
+      id: "patch-001",
+      diff: "--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-old\n+new\n",
       files: ["test.ts"],
-      size: 100,
-      status: "pending",
-    };
-
-    const plan: ImprovementPlan = {
-      id: "plan-123",
-      timestamp: Date.now(),
-      summary: "Test improvement",
-      rationale: "Testing",
-      affectedFiles: ["test.ts"],
-      expectedPatchSize: 50,
-      requiredTests: [],
-      risk: "low",
-      operation: "fix",
-      details: "A test",
-    };
-
-    const result = reviewPatchLocally(patch, plan);
-    expect(result.approved).toBe(true);
-    expect(result.risk).toBe("low");
-  });
-
-  it("should reject patches touching forbidden directories", () => {
-    const patch: Patch = {
-      id: "test-456",
-      planId: "plan-456",
-      diff: "--- a/node_modules/pkg/index.ts\n+++ b/node_modules/pkg/index.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n",
-      timestamp: Date.now(),
-      files: ["node_modules/pkg/index.ts"],
       size: 50,
       status: "pending",
     };
+    pipeline.writePending(patch);
+    const filename = pipeline.getLatestPending();
+    // Filename format: timestamp-patchIDfirst8chars.diff
+    expect(filename).not.toBeNull();
+    expect(filename).toContain("patch-00");
+  });
 
-    const plan: ImprovementPlan = {
-      id: "plan-456",
-      timestamp: Date.now(),
-      summary: "Bad patch",
-      rationale: "Should be rejected",
-      affectedFiles: ["node_modules/pkg/index.ts"],
-      expectedPatchSize: 50,
-      requiredTests: [],
-      risk: "high",
-      operation: "fix",
-      details: "Bad",
-    };
+  it("returns null when no pending diffs exist", () => {
+    expect(pipeline.getLatestPending()).toBeNull();
+  });
+});
 
-    const result = reviewPatchLocally(patch, plan);
-    expect(result.approved).toBe(false);
-    expect(result.risk).toBe("high");
+describe("patch-generator", () => {
+  let pg: typeof import("../src/workers/patch-generator.js");
+  let tmp: string;
+
+  beforeEach(async () => {
+    tmp = resolve(tmpdir(), "loopi-diff-" + Math.random().toString(36).slice(2));
+    mkdirSync(tmp, { recursive: true });
+    vi.resetModules();
+    pg = await import("../src/workers/patch-generator.js");
+  });
+
+  afterEach(() => {
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+  });
+
+  it("generates a valid unified diff for a new file", () => {
+    const filePath = resolve(tmp, "new-file.ts");
+    const content = "const x = 1;\nconsole.log(x);\n";
+    const diff = pg.generateDiffString(filePath, content);
+    expect(diff).toContain("---");
+    expect(diff).toContain("+++");
+    expect(diff).toContain("+const x = 1;");
+    expect(diff).toContain("+console.log(x);");
+    expect(diff).toMatch(/^---/m);
+    expect(diff).toMatch(/^\+\+\+/m);
+    expect(diff.endsWith("\n")).toBe(true);
+  });
+
+  it("generates a valid unified diff for an existing file", () => {
+    const filePath = resolve(tmp, "existing-file.ts");
+    writeFileSync(filePath, "const a = 1;\n", "utf-8");
+    const diff = pg.generateDiffString(filePath, "const a = 2;\n");
+    expect(diff).toContain("-const a = 1;");
+    expect(diff).toContain("+const a = 2;");
+  });
+
+  it("normalizes CRLF to LF", () => {
+    const filePath = resolve(tmp, "crlf-file.ts");
+    writeFileSync(filePath, "line1\r\nline2\r\n", "utf-8");
+    const diff = pg.generateDiffString(filePath, "line1\nline2\nline3\n");
+    expect(diff).toContain("+line3");
+    expect(diff).not.toContain("\r");
   });
 });

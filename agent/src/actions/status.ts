@@ -3,18 +3,12 @@ import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "../actions/config.js";
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export function showStatus() {
-  loadConfig();
+  const config = loadConfig();
   const cwd = process.cwd();
 
   console.log(`\n╔══════════════════════════════════════╗`);
-  console.log(`║   piloop — Agent Status             ║`);
+  console.log(`║   loopi — Agent Status             ║`);
   console.log(`╚══════════════════════════════════════╝\n`);
 
   // Repository info
@@ -22,15 +16,12 @@ export function showStatus() {
   const hasGit = existsSync(gitDir);
   console.log(`  Repository: ${hasGit ? "✓ git initialized" : "✗ no git"}`);
 
-  // Config
-  const configPath = resolve(cwd, "agent/agent.config.json");
-  const hasConfig = existsSync(configPath);
-  console.log(`  Config: ${hasConfig ? "✓ loaded" : "✗ missing"}`);
-
-  if (hasConfig) {
-    const config = JSON.parse(readFileSync(configPath, "utf-8"));
-    console.log(`  Project: ${config.projectName}`);
-    console.log(`  Run frequency: every ${config.runFrequencyMinutes} min`);
+  // Config (now uses the typed Zod-validated config)
+  console.log(`  Config: ✓ loaded`);
+  console.log(`  Project: ${config.projectName}`);
+  console.log(`  Run frequency: every ${config.runFrequencyMinutes} min`);
+  if (config.targetRepo?.path) {
+    console.log(`  Target repo: ${config.targetRepo.path}`);
   }
 
   // Workflow counts
@@ -61,7 +52,6 @@ export function showStatus() {
     console.log(`\n  ─── Logs ───`);
     console.log(`  Log files: ${logs.length}`);
     if (logs.length > 0) {
-      // Show last 3 log lines
       const latestLog = resolve(logDir, logs[0]!);
       const logContent = readFileSync(latestLog, "utf-8").trim();
       const lastLines = logContent.split("\n").slice(-3);
@@ -85,9 +75,9 @@ export function showStatus() {
   }
 
   // Source count
-  const srcFiles = readdirRecursive(resolve(cwd, "agent/src"), ".ts") + readdirRecursive(resolve(cwd, "agent"), ".ts");
+  const totalFiles = readdirRecursive(resolve(cwd, "agent"), ".ts");
   console.log(`\n  ─── Source ───`);
-  console.log(`  TypeScript files: ${getFileCount(cwd, "agent")}`);
+  console.log(`  TypeScript files: ${totalFiles}`);
 
   console.log();
 }
@@ -109,10 +99,6 @@ function readdirRecursive(dir: string, ext: string): number {
     // skip
   }
   return count;
-}
-
-function getFileCount(cwd: string, subdir: string): number {
-  return readdirRecursive(resolve(cwd, subdir), ".ts");
 }
 
 // Allow direct CLI execution

@@ -1,13 +1,19 @@
-import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from "fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { resolve } from "path";
 import type { Patch } from "../types/index.js";
 import { logger } from "./logger.js";
 
-const PENDING_DIR = resolve(process.cwd(), "agent/workflows/pending");
-const APPROVED_DIR = resolve(process.cwd(), "agent/workflows/approved");
+let _pendingDir = resolve(process.cwd(), "agent/workflows/pending");
+let _approvedDir = resolve(process.cwd(), "agent/workflows/approved");
+
+/** Override directories for testing */
+export function setPrDirs(pending: string, approved: string): void {
+  _pendingDir = pending;
+  _approvedDir = approved;
+}
 
 function ensureDirs(): void {
-  for (const dir of [PENDING_DIR, APPROVED_DIR]) {
+  for (const dir of [_pendingDir, _approvedDir]) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
@@ -18,14 +24,14 @@ export function writePendingPR(patch: Patch): string {
   ensureDirs();
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const filename = `${timestamp}-${patch.id.slice(0, 8)}.diff`;
-  const filepath = resolve(PENDING_DIR, filename);
+  const filepath = resolve(_pendingDir, filename);
 
   const content = [
-    `;; piloop patch: ${patch.id}`,
-    `;; plan: ${patch.planId}`,
+    `;; loopi patch: ${patch.id}`,
+    `;; plan: ${patch.planId ?? "unknown"}`,
     `;; files: ${patch.files.join(", ")}`,
     `;; size: ${patch.size} bytes`,
-    `;; generated: ${new Date(patch.timestamp).toISOString()}`,
+    `;; generated: ${new Date().toISOString()}`,
     "",
     patch.diff,
   ].join("\n");
@@ -44,12 +50,13 @@ export function moveToApproved(patchId: string): boolean {
     return false;
   }
 
-  const srcPath = resolve(PENDING_DIR, match);
-  const destPath = resolve(APPROVED_DIR, match);
+  const srcPath = resolve(_pendingDir, match);
+  const destPath = resolve(_approvedDir, match);
 
   try {
     const data = readFileSync(srcPath, "utf-8");
     writeFileSync(destPath, data, "utf-8");
+    unlinkSync(srcPath); // Remove from pending — it's now approved
     logger.info(`Moved to approved: ${match}`);
     return true;
   } catch (err) {
@@ -61,7 +68,7 @@ export function moveToApproved(patchId: string): boolean {
 export function listPending(): string[] {
   ensureDirs();
   try {
-    return readdirSync(PENDING_DIR).filter((f) => f.endsWith(".diff"));
+    return readdirSync(_pendingDir).filter((f) => f.endsWith(".diff"));
   } catch {
     return [];
   }
@@ -70,25 +77,24 @@ export function listPending(): string[] {
 export function listApproved(): string[] {
   ensureDirs();
   try {
-    return readdirSync(APPROVED_DIR).filter((f: string) => f.endsWith(".diff"));
+    return readdirSync(_approvedDir).filter((f: string) => f.endsWith(".diff"));
   } catch {
     return [];
   }
 }
 
 export function readDiffFile(filename: string): { content: string; metadata: Record<string, string> } | null {
-  const dir = filename.includes("approved") ? APPROVED_DIR : PENDING_DIR;
-  const filepath = existsSync(resolve(dir, filename))
-    ? resolve(dir, filename)
-    : existsSync(resolve(PENDING_DIR, filename))
-      ? resolve(PENDING_DIR, filename)
-      : existsSync(resolve(APPROVED_DIR, filename))
-        ? resolve(APPROVED_DIR, filename)
+  const filepath = existsSync(resolve(_approvedDir, filename))
+    ? resolve(_approvedDir, filename)
+    : existsSync(resolve(_pendingDir, filename))
+      ? resolve(_pendingDir, filename)
+      : existsSync(resolve(_approvedDir, filename))
+        ? resolve(_approvedDir, filename)
         : null;
 
   if (!filepath) return null;
 
-  const content = readFileSync(filepath, "utf-8");
+  const content = readFileSync(filepath, "utf-8").replace(/\r/g, "");
   const metadata: Record<string, string> = {};
 
   for (const line of content.split("\n")) {
@@ -100,7 +106,12 @@ export function readDiffFile(filename: string): { content: string; metadata: Rec
     }
   }
 
-  // Strip metadata lines to get pure diff
+  // Strip metadata lines to get pure diff, trim only leading whitespace
   const diffLines = content.split("\n").filter((l) => !l.startsWith(";; "));
-  return { content: diffLines.join("\n").trim(), metadata };
+  const rawContent = diffLines.join("\n");
+  // Trim leading newlines/whitespace but preserve trailing newline
+  const trimmed = rawContent.replace(/^\s+/, "");
+  // Ensure diff ends with a newline (git apply requires it)
+  const finalContent = trimmed.endsWith("\n") ? trimmed : trimmed + "\n";
+  return { content: finalContent, metadata };
 }

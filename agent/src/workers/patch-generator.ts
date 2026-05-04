@@ -1,181 +1,55 @@
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import { resolve } from "path";
-import type { ImprovementPlan, Patch } from "../types/index.js";
-import { getConfig } from "../actions/config.js";
-import { logger } from "../actions/logger.js";
+/**
+ * Patch Generator — unified diff utility
+ *
+ * Uses the `diff` library for industry-standard diff generation.
+ * Intelligent code changes are delegated to loopi.patch-agent.
+ * This module only handles the mechanical diff formatting.
+ */
+import { readFileSync, existsSync } from "fs";
+import { structuredPatch } from "diff";
 
+/**
+ * Generate a unified diff string comparing the original file
+ * (read from disk) with the provided new content.
+ *
+ * @param originalPath - Path to the original file (used for headers only)
+ * @param newContent   - Modified content to diff against
+ * @returns A valid unified diff string, always ending with "\n"
+ */
 export function generateDiffString(originalPath: string, newContent: string): string {
-  const originalContent = existsSync(originalPath) ? readFileSync(originalPath, "utf-8") : "";
-  const origLines = originalContent.split("\n");
-  const newLines = newContent.split("\n");
+  // Normalize line endings to LF — CRLF confuses the diff library on Windows
+  const originalContent = existsSync(originalPath)
+    ? readFileSync(originalPath, "utf-8").replace(/\r\n/g, "\n")
+    : "";
 
-  // Simple unified diff generator
-  const diffLines: string[] = [];
-  const cwd = process.cwd().replace(/\\/g, "/");
-  const normalizedPath = originalPath.replace(/\\/g, "/");
-  const relativePath = normalizedPath.startsWith(cwd)
-    ? normalizedPath.slice(cwd.length)
-    : "/" + normalizedPath.split("/").pop()!;
+  const result = structuredPatch(
+    // Use relative-ish paths for the diff headers
+    `a/${originalPath.replace(/^.*[/\\]/, "")}`,
+    `b/${originalPath.replace(/^.*[/\\]/, "")}`,
+    originalContent,
+    newContent.replace(/\r\n/g, "\n"),
+    undefined,
+    undefined,
+    { context: 3 }
+  );
 
-  diffLines.push(`--- a${relativePath}`);
-  diffLines.push(`+++ b${relativePath}`);
+  const lines: string[] = [];
+  lines.push("--- " + result.oldFileName);
+  lines.push("+++ " + result.newFileName);
 
-  // Find differing chunks
-  const maxLen = Math.max(origLines.length, newLines.length);
-  let hunkStart = -1;
-  let hunkOrig: string[] = [];
-  let hunkNew: string[] = [];
-
-  // Simple line-by-line comparison
-  const changes: { type: "equal" | "remove" | "add"; line: string }[] = [];
-  const ctxLines = 3;
-
-  // Build change list
-  const minLen = Math.min(origLines.length, newLines.length);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < minLen) {
-      if (origLines[i] === newLines[i]) {
-        changes.push({ type: "equal", line: origLines[i]! });
-      } else {
-        changes.push({ type: "remove", line: origLines[i]! });
-        changes.push({ type: "add", line: newLines[i]! });
-      }
-    } else if (i < origLines.length) {
-      changes.push({ type: "remove", line: origLines[i]! });
-    } else {
-      changes.push({ type: "add", line: newLines[i]! });
+  for (const hunk of result.hunks) {
+    lines.push(
+      `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`
+    );
+    // Filter out trailing whitespace-only context lines that confuse git apply
+    const hunkLines = hunk.lines.filter(
+      (l, i) => !(l.trim() === "" && i >= hunk.lines.length - 1)
+    );
+    for (const line of hunkLines) {
+      lines.push(line);
     }
   }
 
-  // Group into hunks
-  let i = 0;
-  while (i < changes.length) {
-    if (changes[i]!.type !== "equal") {
-      // Start of a hunk — go back ctxLines for context
-      const hunkStartIdx = Math.max(0, i - ctxLines);
-      const hunkEndIdx = Math.min(changes.length - 1, i + ctxLines);
-
-      let origStart = hunkStartIdx + 1;
-      let newStart = hunkStartIdx + 1;
-      let origCount = 0;
-      let newCount = 0;
-
-      const hunkContent: string[] = [];
-
-      for (let j = hunkStartIdx; j <= hunkEndIdx; j++) {
-        const change = changes[j]!;
-        if (change.type === "equal") {
-          hunkContent.push(` ${change.line}`);
-          origCount++;
-          newCount++;
-        } else if (change.type === "remove") {
-          hunkContent.push(`-${change.line}`);
-          origCount++;
-        } else {
-          hunkContent.push(`+${change.line}`);
-          newCount++;
-        }
-      }
-
-      // Skip to after this hunk
-      i = hunkEndIdx + 1;
-
-      // Write hunk header
-      diffLines.push(`@@ -${origStart},${origCount} +${newStart},${newCount} @@`);
-      diffLines.push(...hunkContent);
-    } else {
-      i++;
-    }
-  }
-
-  return diffLines.join("\n");
-}
-
-export interface PatchGeneratorInput {
-  plan: ImprovementPlan;
-  getFileContent: (path: string) => string;
-  makeChanges: (path: string, content: string) => void;
-}
-
-/**
- * Generates a patch (unified diff string) based on the improvement plan.
- * This is the core local patch generation logic.
- */
-export function generatePatch(plan: ImprovementPlan): Patch {
-  logger.info(`Generating patch for: ${plan.summary}`);
-
-  const patchLines: string[] = [];
-  let totalSize = 0;
-
-  for (const file of plan.affectedFiles) {
-    const fullPath = resolve(process.cwd(), file);
-    if (!existsSync(fullPath)) {
-      logger.warn(`File not found, skipping: ${file}`);
-      continue;
-    }
-
-    const originalContent = readFileSync(fullPath, "utf-8");
-
-    // Apply the plan's changes to produce modified content
-    let modifiedContent = applyPlanChanges(originalContent, plan, file);
-
-    // Generate diff
-    const diff = generateDiffString(fullPath, modifiedContent);
-    patchLines.push(diff);
-    totalSize += Buffer.byteLength(diff, "utf-8");
-  }
-
-  const diff = patchLines.join("\n");
-
-  const patch: Patch = {
-    id: plan.id,
-    planId: plan.id,
-    diff,
-    timestamp: Date.now(),
-    files: plan.affectedFiles,
-    size: totalSize,
-    status: "pending",
-  };
-
-  logger.info(`Patch generated: ${patch.files.length} files, ${totalSize} bytes`);
-  return patch;
-}
-
-/**
- * The TODO/FIXME pattern used by the signal detector.
- */
-const TODO_REGEX = /\/\/\s*(TODO|FIXME|HACK|XXX|WORKAROUND)\b.*$/gm;
-
-/**
- * Apply plan changes to file content based on the plan type and details.
- * This is a simplified transformation engine. For complex changes, the
- * system invokes the pi.dev patch-agent.
- */
-function applyPlanChanges(content: string, plan: ImprovementPlan, filePath: string): string {
-  switch (plan.operation) {
-    case "typing": {
-      // Replace `any` with `unknown` as a safer default (only in type positions)
-      // Match `: any` and `as any` patterns to be safe
-      return content
-        .replace(/:\s*any\b/g, ": unknown")
-        .replace(/as\s+any\b/g, "as unknown");
-    }
-    case "fix": {
-      // If the plan mentions TODOs, strip TODO/FIXME comment lines
-      if (
-        plan.details.toLowerCase().includes("todo") ||
-        plan.details.toLowerCase().includes("fixme")
-      ) {
-        // Remove standalone TODO/FIXME comment lines
-        return content.replace(TODO_REGEX, "// $1: addressed by piloop");
-      }
-      return content;
-    }
-    case "refactor": {
-      // Stub for local refactoring — real work done by patch-agent
-      return content;
-    }
-    default:
-      return content;
-  }
+  // git apply requires a trailing newline
+  return lines.join("\n") + "\n";
 }
