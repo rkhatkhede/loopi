@@ -4,7 +4,7 @@
  * A real-time terminal dashboard showing the system overview.
  * Uses ANSI escape codes and picocolors — zero additional dependencies.
  *
- * Launched via: loopi dashboard
+ * Launched via: loopi
  *
  * Controls:
  *   q        — Quit dashboard
@@ -12,13 +12,14 @@
  *   Space    — Toggle auto-refresh
  *   a        — Approve latest pending patch
  *   R (shift) — Reject latest pending patch
- *   s        — Show detailed status (runs status.ts inline)
+ *   p        — Promote dev → main
+ *   ?        — Show pipeline spec (any key to dismiss)
  */
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "../actions/config.js";
 import { listPending, listApproved } from "../actions/pr.js";
-import { readVision, readOpportunityHistory, approvePending, rejectPending, promoteToMain } from "../pipeline.js";
+import { readVision, readOpportunityHistory, approvePending, rejectPending, promoteToMain, PIPELINE_SPEC } from "../pipeline.js";
 import { logger } from "../actions/logger.js";
 import pc from "picocolors";
 
@@ -284,13 +285,62 @@ function render(state: DashboardState, layout: Layout): string {
   lines.push(BORDER_BL + repeat(BORDER_H, cols - 2) + BORDER_BR);
 
   // Help bar
-  const help = pc.dim(" [q] quit  [r] refresh  [Space] toggle auto  [a] approve  [R] reject  [p] promote  [s] status ");
+  const help = pc.dim(" [q] quit  [r] refresh  [Space] toggle auto  [a] approve  [R] reject  [p] promote  [?] spec ");
   const helpLine = help.padEnd(cols).slice(0, cols);
   lines.push(" " + helpLine);
 
   // ── Assemble ──
   const output = hideCursor() + cursorTo(1, 1) + "\n" + lines.join("\n");
   return output;
+}
+
+// ─── Overlay: pipeline spec ───
+
+function renderSpecOverlay(cols: number, rows: number): string {
+  const spec = PIPELINE_SPEC.trim();
+  const specLines = spec.split("\n");
+
+  // Calculate overlay dimensions
+  const overlayW = Math.min(cols - 4, 80);
+  const overlayH = Math.min(rows - 4, specLines.length + 4);
+  const startRow = Math.floor((rows - overlayH) / 2);
+  const startCol = Math.floor((cols - overlayW) / 2);
+
+  const output: string[] = [];
+
+  // Push cursor to overlay position
+  output.push(cursorTo(startRow, startCol));
+
+  // Top border
+  output.push(pc.cyan(boxTop(overlayW)));
+
+  // Title
+  const title = pc.bold(" PIPELINE SPECIFICATION ");
+  output.push(pc.cyan(BORDER_V) + title.padEnd(overlayW - 2).slice(0, overlayW - 2) + pc.cyan(BORDER_V));
+
+  // Divider
+  output.push(pc.cyan(BORDER_LT) + repeat(pc.cyan(BORDER_H), overlayW - 2) + pc.cyan(BORDER_RT));
+
+  // Content (scrollable — show what fits)
+  const contentH = overlayH - 4;
+  const visible = specLines.slice(0, contentH);
+  for (const line of visible) {
+    const truncated = line.length > overlayW - 4 ? line.slice(0, overlayW - 4) + "…" : line;
+    output.push(pc.cyan(BORDER_V) + " " + pc.dim(truncated).padEnd(overlayW - 3).slice(0, overlayW - 3) + pc.cyan(BORDER_V));
+  }
+
+  // Fill remaining
+  for (let i = visible.length; i < contentH; i++) {
+    output.push(pc.cyan(BORDER_V) + repeat(" ", overlayW - 2) + pc.cyan(BORDER_V));
+  }
+
+  // Bottom border
+  output.push(pc.cyan(boxBot(overlayW)));
+
+  // Dismiss hint
+  output.push(cursorTo(startRow + overlayH, startCol) + pc.dim(" Press any key to dismiss "));
+
+  return hideCursor() + clearScreen() + output.join("\n");
 }
 
 // ─── Dashboard loop ───
@@ -319,7 +369,6 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
 
   if (!stdout.isTTY || !stdin.isTTY) {
     console.error(pc.yellow("Dashboard requires a TTY terminal."));
-    console.error("Try: loopi status");
     process.exit(1);
   }
 
@@ -340,11 +389,21 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   let running = true;
   let autoRefresh = true;
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
+  let showingSpec = false;
+
+  function getDimensions() {
+    return { cols: stdout.columns ?? 80, rows: stdout.rows ?? 24 };
+  }
 
   function refresh() {
     if (!running) return;
-    const cols = stdout.columns ?? 80;
-    const rows = stdout.rows ?? 24;
+    const { cols, rows } = getDimensions();
+
+    if (showingSpec) {
+      stdout.write(renderSpecOverlay(cols, rows));
+      return;
+    }
+
     const layout = computeLayout(rows, cols);
     const state = collectState(layout);
     const output = render(state, layout);
@@ -367,6 +426,13 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
   function onData(data: string) {
     const char = data.toLowerCase();
 
+    // If showing spec overlay, any key dismisses it
+    if (showingSpec) {
+      showingSpec = false;
+      refresh();
+      return;
+    }
+
     if (data === "\u0003" || char === "q") {
       // Ctrl+C or q
       running = false;
@@ -386,6 +452,13 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
       } else {
         stopAutoRefresh();
       }
+      refresh();
+      return;
+    }
+
+    if (data === "?") {
+      showingSpec = true;
+      stopAutoRefresh();
       refresh();
       return;
     }
@@ -423,16 +496,6 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
         });
       }
       refresh();
-      return;
-    }
-
-    if (char === "s") {
-      stopAutoRefresh();
-      cleanup();
-      onAction?.({ type: "status" });
-      // After status exits, restart dashboard
-      // For now just quit
-      running = false;
       return;
     }
   }

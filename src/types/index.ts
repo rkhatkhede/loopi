@@ -36,6 +36,21 @@ export const VisionSchema = z.object({
    * with the vision.
    */
   northStar: z.string().optional(),
+
+  /**
+   * Milestone checkpoints toward the north star.
+   * Agents use these to track progress across cycles.
+   */
+  milestones: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().optional(),
+        status: z.enum(["pending", "in_progress", "completed"]).default("pending"),
+        completedAt: z.string().datetime({ offset: true }).optional(),
+      })
+    )
+    .default([]),
 });
 export type VisionDocument = z.infer<typeof VisionSchema>;
 
@@ -194,6 +209,32 @@ export const ReviewResultSchema = z.object({
   recommendation: z.string().default(""),
 });
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;
+
+// ──────────────────────────────────────────────
+// Pattern (lightweight cross-session memory)
+// ──────────────────────────────────────────────
+
+export const PatternSchema = z.object({
+  id: z.string(),
+  createdAt: z.number().int().positive(),
+  category: z.enum([
+    "feature",
+    "revenue",
+    "growth",
+    "tech-debt",
+    "security",
+    "performance",
+    "quality",
+    "docs",
+    "architecture",
+  ]),
+  summary: z.string().min(1).max(200),
+  filesChanged: z.array(z.string()),
+  patchSize: z.number().int().nonnegative(),
+  outcome: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+});
+export type Pattern = z.infer<typeof PatternSchema>;
 
 // ──────────────────────────────────────────────
 // Default config (embedded, no file required)

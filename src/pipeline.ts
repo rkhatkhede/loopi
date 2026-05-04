@@ -40,6 +40,7 @@ import {
   ImprovementPlanSchema,
   PatchSchema,
   ReviewResultSchema,
+  PatternSchema,
   ConfigSchema,
   type VisionDocument,
   type Opportunity,
@@ -48,6 +49,7 @@ import {
   type ImprovementPlan,
   type Patch,
   type ReviewResult,
+  type Pattern,
   type Config,
   type CycleResult,
   AGENTS,
@@ -243,6 +245,32 @@ export function saveOpportunity(opportunity: Opportunity): void {
   const tmpPath = resolve(dirname(targetPath), `.${Date.now()}.tmp`);
   writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
   renameSync(tmpPath, targetPath);
+}
+
+/**
+ * Read all patterns from disk.
+ */
+export function readPatterns(): Pattern[] {
+  const path = resolve(process.cwd(), ".pi/loopi/patterns.json");
+  if (!existsSync(path)) return [];
+  try {
+    return z.array(PatternSchema).parse(JSON.parse(readFileSync(path, "utf-8")));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Append a pattern to the patterns file.
+ */
+export function savePattern(pattern: Pattern): void {
+  const path = resolve(process.cwd(), ".pi/loopi/patterns.json");
+  const existing = readPatterns();
+  existing.push(pattern);
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
+  renameSync(tmpPath, path);
+  logger.info(`Pattern saved: ${pattern.summary}`);
 }
 
 /**
@@ -496,10 +524,13 @@ export async function promoteToMain(targetRoot = "."): Promise<boolean> {
 export const PIPELINE_SPEC = `
 # loopi Pipeline Specification
 
-> 🔁 **Error handling:** If any subagent call or validation step fails,
-> retry up to 2 times with a brief delay (5s) before aborting the cycle.
-> Use parseAgentOutput / parseAgentData for runtime validation.
-> If validation fails after retries, log the error and exit gracefully.
+> 🔁 **Retry strategy (use for every step):**
+>   1st failure → wait 2s, retry
+>   2nd failure → wait 5s, retry
+>   3rd failure → wait 10s, retry
+>   4th failure → abort cycle with error message
+>   Use parseAgentOutput / parseAgentData for runtime validation.
+>   If validation fails after retries, log the error and exit gracefully.
 
 ## Step 1: Ensure Vision
 - If .pi/loopi/vision.json doesn't exist, run:
@@ -508,7 +539,8 @@ export const PIPELINE_SPEC = `
 - Validate the output with: parseAgentData(output, VisionSchema, "vision")
 
 ## Step 2: Find Opportunity
-- Run: subagent({ agent: "${AGENTS.OPPORTUNITY}", task: JSON.stringify({ vision, history }) })
+- Read .pi/loopi/patterns.json via bash: node -e "import('./dist/pipeline.js').then(m => console.log(JSON.stringify(m.readPatterns())))"
+- Run: subagent({ agent: "${AGENTS.OPPORTUNITY}", task: JSON.stringify({ vision, history, patterns }) })
 - Validate the output with: parseAgentData(output, z.array(OpportunitySchema), "opportunity")
 - Pick the best opportunity (highest value/effort ratio).
 - If none found, exit with "nothing to improve."
@@ -560,6 +592,7 @@ export const PIPELINE_SPEC = `
 ## Step 10: Update Docs
 - Run: subagent({ agent: "${AGENTS.DOCS}", task: JSON.stringify({ plan, diff }) })
 - Validate the output with: parseAgentData(output, z.object({ filesUpdated: z.array(z.string()), summary: z.string() }), "docs")
+- The docs agent will also save a pattern record to .pi/loopi/patterns.json
 
 ## End of Cycle
 - All approved changes accumulate on \`dev\`.
