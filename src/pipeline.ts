@@ -369,14 +369,10 @@ export async function applyPatch(
     // Commit
     await createCommit(`${cfg.git.commitPrefix} ${summary}`);
 
-    // Switch back to dev and merge
+    // Switch back to dev — changes stay on the feature branch for review
     await checkoutBranch(baseBranch);
-    await mergeBranch(branchName, `${cfg.git.commitPrefix} merge ${summary}`);
 
-    // Clean up feature branch
-    await deleteBranch(branchName);
-
-    logger.info(`Applied ${summary} → ${baseBranch} via ${branchName}`);
+    logger.info(`Applied ${summary} → feature branch ${branchName} (waiting for approval)`);
     return branchName;
   } finally {
     // Release lock
@@ -431,6 +427,68 @@ export async function approvePending(targetRoot = "."): Promise<boolean> {
   moveToApproved(patchId);
   logger.info(`Applied and approved: ${latest}`);
   return true;
+}
+
+/**
+ * Approve a feature branch — merge it into dev and delete the branch.
+ */
+export async function approveFeatureBranch(
+  branchName: string,
+  targetRoot = "."
+): Promise<boolean> {
+  const git = getGit(targetRoot);
+  const currentBranch = await getCurrentBranch();
+
+  try {
+    // Ensure we're on dev
+    if (currentBranch !== "dev") {
+      await checkoutBranch("dev");
+    }
+
+    // Merge feature branch into dev (squash merge with a single commit)
+    const cfg = getConfig();
+    await mergeBranch(branchName, `${cfg.git.commitPrefix} merge ${branchName}`);
+
+    // Delete the feature branch
+    await deleteBranch(branchName);
+
+    logger.info(`Approved: merged ${branchName} into dev`);
+    return true;
+  } catch (err) {
+    logger.error(`Failed to approve ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+/**
+ * Reject a feature branch — delete it without merging.
+ */
+export async function rejectFeatureBranch(
+  branchName: string,
+  targetRoot = "."
+): Promise<boolean> {
+  try {
+    await deleteBranch(branchName);
+    logger.info(`Rejected: deleted ${branchName}`);
+    return true;
+  } catch (err) {
+    logger.error(`Failed to reject ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+/**
+ * List active feature branches (branches with the configured prefix).
+ */
+export async function getActiveFeatureBranches(targetRoot = "."): Promise<string[]> {
+  const git = getGit(targetRoot);
+  const cfg = getConfig();
+  const prefix = cfg.git.branchPrefix;
+  const branches = await git.branchLocal();
+  return branches.all
+    .filter((b: string) => b.startsWith(prefix))
+    .sort()
+    .reverse();
 }
 
 /**

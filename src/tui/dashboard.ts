@@ -10,8 +10,8 @@
  *   q        — Quit dashboard
  *   r        — Force refresh
  *   Space    — Toggle auto-refresh
- *   a        — Approve latest pending patch
- *   R (shift) — Reject latest pending patch
+ *   a        — Approve latest feature branch (merge into dev)
+ *   R (shift) — Reject latest feature branch (delete)
  *   p        — Promote dev → main
  *   ?        — Show pipeline spec (any key to dismiss)
  */
@@ -19,7 +19,12 @@ import { readFileSync, readdirSync, existsSync } from "fs";
 import { resolve } from "path";
 import { loadConfig } from "../actions/config.js";
 import { listPending, listApproved } from "../actions/pr.js";
-import { readVision, readOpportunityHistory, approvePending, rejectPending, promoteToMain, readPatterns, PIPELINE_SPEC } from "../pipeline.js";
+import {
+  readVision, readOpportunityHistory,
+  approvePending, rejectPending,
+  approveFeatureBranch, rejectFeatureBranch, getActiveFeatureBranches,
+  promoteToMain, readPatterns, PIPELINE_SPEC
+} from "../pipeline.js";
 import { getPipelineProgress } from "../pipeline-runner.js";
 import { logger } from "../actions/logger.js";
 import pc from "picocolors";
@@ -99,11 +104,32 @@ interface DashboardState {
   rejectedCount: number;
   logs: string[];
   error?: string;
+  featureBranches: string[];
+  appliedCount: number;
+}
+
+function getFeatureBranches(): string[] {
+  let prefix = "loopi/";
+  try {
+    const cfg = loadConfig();
+    if (cfg?.git?.branchPrefix) prefix = cfg.git.branchPrefix;
+  } catch { /* use default */ }
+  const refsDir = resolve(process.cwd(), ".git/refs/heads");
+  if (!existsSync(refsDir)) return [];
+  try {
+    return readdirSync(refsDir)
+      .filter((f) => f.startsWith(prefix))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
 }
 
 function collectState(layout: Layout): DashboardState {
   const prog = getPipelineProgress();
   const cwd = process.cwd();
+  const featureBranches = getFeatureBranches();
   const logLines: string[] = [];
 
   // Read log file
@@ -154,6 +180,8 @@ function collectState(layout: Layout): DashboardState {
     rejectedCount: 0,
     logs: logLines,
     error: prog.error,
+    featureBranches,
+    appliedCount: prog.patches,
   };
 }
 
@@ -239,9 +267,9 @@ function render(state: DashboardState, layout: Layout): string {
 
   // Workflows content
   const wfLines = [
-    ` Pending:  ${pc.yellow(String(state.pendingCount))} diff(s)`,
-    ` Approved: ${pc.green(String(state.approvedCount))} diff(s)`,
-    ` Rejected: ${state.rejectedCount > 0 ? pc.red(String(state.rejectedCount)) : "0"} diff(s)`,
+    ` Branches: ${pc.cyan(String(state.featureBranches.length || 0))} pending`,
+    ...state.featureBranches.slice(0, 3).map((b) => `   ${pc.dim(b.slice(0, 50))}`),
+    ` Diff files: ${pc.yellow(String(state.pendingCount))} pending / ${pc.green(String(state.approvedCount))} done`,
     "",
   ];
 
@@ -553,8 +581,17 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
       if (onAction) {
         onAction({ type: "approve" });
       } else {
-        approvePending(".").then((ok) => {
-          if (ok) logger.info("Patch approved and merged.");
+        // Approve the latest feature branch, fallback to pending patch
+        getActiveFeatureBranches(".").then((branches) => {
+          if (branches.length > 0) {
+            approveFeatureBranch(branches[0]!, ".").then((ok) => {
+              if (ok) logger.info(`Approved: merged ${branches[0]} into dev`);
+            });
+          } else {
+            approvePending(".").then((ok) => {
+              if (ok) logger.info("Patch approved and merged.");
+            });
+          }
         });
       }
       refresh();
@@ -565,8 +602,17 @@ export async function runDashboard(onAction?: DashboardCallback): Promise<void> 
       if (onAction) {
         onAction({ type: "reject" });
       } else {
-        rejectPending().then((ok) => {
-          if (ok) logger.info("Patch rejected.");
+        // Reject the latest feature branch, fallback to pending patch
+        getActiveFeatureBranches(".").then((branches) => {
+          if (branches.length > 0) {
+            rejectFeatureBranch(branches[0]!, ".").then((ok) => {
+              if (ok) logger.info(`Rejected: deleted ${branches[0]}`);
+            });
+          } else {
+            rejectPending().then((ok) => {
+              if (ok) logger.info("Patch rejected.");
+            });
+          }
         });
       }
       refresh();
