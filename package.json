@@ -1,6 +1,6 @@
 {
   "name": "@rkhatkhede/loopi",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Local Autonomous Improvement Agent — self-improving bot for any code repository",
   "type": "module",
   "bin": {
