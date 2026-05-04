@@ -250,8 +250,134 @@ async function ensureVision(): Promise<VisionDocument> {
     log("  No pending milestones — scanning for general improvements.");
   }
 
+  // If no milestones exist, generate them via pi.dev
+  if (!vision.milestones || vision.milestones.length === 0) {
+    log("  No milestones found — will generate after RPC connection.");
+  }
+
   await sleep(10);
   return vision;
+}
+
+/**
+ * Generate milestones from vision by asking pi.dev agent.
+ * If the agent asks clarifying questions, pauses and awaits user input.
+ */
+async function generateMilestones(vision: VisionDocument, rpc: RPCClient): Promise<void> {
+  log("  → Generating milestones from vision...");
+
+  const prompt = `You are a milestone planner for a software project.
+
+Generate 2-5 milestones that break down the north star into achievable checkpoints.
+
+VISION:
+${JSON.stringify({ northStar: vision.northStar, projectDescription: vision.projectDescription, businessGoals: vision.businessGoals, constraints: vision.constraints }, null, 2)}
+
+Respond with JSON ONLY — no markdown, no explanation:
+
+If the vision is detailed enough to infer milestones:
+{
+  "type": "milestones",
+  "milestones": [
+    { "name": "Milestone name", "description": "What this milestone achieves", "status": "in_progress" },
+    { "name": "...", "description": "...", "status": "pending" }
+  ]
+}
+
+If the vision is too vague and you need clarification:
+{
+  "type": "questions",
+  "questions": ["Question 1?", "Question 2?"]
+}`;
+
+  const response = await rpc.prompt(prompt);
+  const data = parseAgentData<{ type: string; milestones?: Array<{ name: string; description?: string; status?: string }>; questions?: string[] }>(response);
+
+  if (!data) {
+    log("  Warning: Could not parse milestone generation response. Creating default milestone.");
+    vision.milestones = [{
+      name: "Improve code quality",
+      description: "Fix lint errors, failing tests, and TODOs",
+      status: "in_progress" as const,
+    }];
+    saveVision(vision);
+    return;
+  }
+
+  if (data.type === "questions" && data.questions && data.questions.length > 0) {
+    // Agent needs clarification — save questions and wait for user input
+    log(`  Agent asks: ${data.questions.join(" | ")}`);
+    store.set(KEYS.PENDING_QUESTIONS, data.questions);
+    store.delete(KEYS.PENDING_ANSWERS);
+
+    // Clear progress to let dashboard know we're waiting
+    _progress.step = "Awaiting Input";
+    _progress.message = `Agent needs ${data.questions.length} clarification(s) about milestones`;
+    saveProgress();
+
+    // Poll for answers (up to 30 min, checking every 2s)
+    const deadline = Date.now() + 30 * 60 * 1000;
+    while (Date.now() < deadline) {
+      const answers = store.get(KEYS.PENDING_ANSWERS) as string[] | undefined;
+      if (answers && answers.length === data.questions.length) {
+        log("  Answers received from user.");
+        store.delete(KEYS.PENDING_QUESTIONS);
+        store.delete(KEYS.PENDING_ANSWERS);
+
+        // Send answers back to agent
+        const followUp = `You asked clarifying questions. Here are the answers:
+${data.questions.map((q, i) => `Q: ${q}\nA: ${answers[i]}`).join("\n\n")}
+
+Now respond with milestones in the same JSON format.`;
+
+        const finalResponse = await rpc.prompt(followUp);
+        const finalData = parseAgentData<{ type: string; milestones?: Array<{ name: string; description?: string; status?: string }> }>(finalResponse);
+
+        if (finalData && finalData.type === "milestones" && finalData.milestones && finalData.milestones.length > 0) {
+          vision.milestones = finalData.milestones.map((m, i) => ({
+            name: m.name,
+            description: m.description,
+            status: i === 0 ? "in_progress" as const : (m.status as "pending" | "in_progress" | "completed") || "pending" as const,
+          }));
+          saveVision(vision);
+          log(`  Generated ${vision.milestones.length} milestone(s).`);
+          return;
+        }
+        break;
+      }
+      await sleep(2000);
+    }
+
+    // Timeout or failed — create a default milestone
+    log("  Creating default milestone (user did not answer in time).");
+    vision.milestones = [{
+      name: "Improve code quality",
+      description: "Fix lint errors, failing tests, and TODOs",
+      status: "in_progress" as const,
+    }];
+    saveVision(vision);
+    store.delete(KEYS.PENDING_QUESTIONS);
+    return;
+  }
+
+  if (data.type === "milestones" && data.milestones && data.milestones.length > 0) {
+    vision.milestones = data.milestones.map((m, i) => ({
+      name: m.name,
+      description: m.description,
+      status: i === 0 ? "in_progress" as const : (m.status as "pending" | "in_progress" | "completed") || "pending" as const,
+    }));
+    saveVision(vision);
+    log(`  Generated ${vision.milestones.length} milestone(s) from vision.`);
+    return;
+  }
+
+  log("  Warning: Unexpected milestone response format. Creating default milestone.");
+  vision.milestones = [{
+    name: "Improve code quality",
+    description: "Fix lint errors, failing tests, and TODOs",
+    status: "in_progress" as const,
+  }];
+  saveVision(vision);
 }
 
 // ─── Step 2: SCAN via pi RPC ───
@@ -763,14 +889,27 @@ export async function runAutoPipeline(): Promise<PipelineProgress> {
     }
 
     // Hoist vision for both fresh and resume paths
-    let vision = readVision();
-    if (!vision) vision = await ensureVision();
+    let vision: VisionDocument = readVision() ?? await ensureVision();
 
     if (!isResume) {
       // ── Step 1: Vision ──
       _progress = { ..._progress, step: "Vision", message: "Checking vision..." };
       log("  → Step 1: Vision");
       saveProgress();
+
+      // Generate milestones if missing
+      if (!vision.milestones || vision.milestones.length === 0) {
+        _progress = { ..._progress, step: "Milestones", message: "Generating milestones from vision..." };
+        log("  → Generating milestones...");
+        await generateMilestones(vision, rpc);
+        const reloaded = readVision();
+        if (reloaded) vision = reloaded;
+        if (vision.milestones && vision.milestones.length > 0) {
+          _progress.message = `${vision.milestones.length} milestone(s) generated`;
+          log(`  ✓ ${vision.milestones.length} milestone(s) generated.`);
+        }
+        saveProgress();
+      }
 
       // ── Step 2: Scan ──
       _progress = {

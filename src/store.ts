@@ -15,6 +15,8 @@ export const KEYS = {
   GOALS: "goals",
   TASKS: "tasks",
   PIPELINE_PROGRESS: "pipelineProgress",
+  PENDING_QUESTIONS: "pendingQuestions",
+  PENDING_ANSWERS: "pendingAnswers",
 } as const;
 
 /** Singleton conf instance — project-local in .pi/loopi */

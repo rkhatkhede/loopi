@@ -27,6 +27,7 @@ import {
 import { listPending, listApproved } from "../actions/pr.js";
 import { loadConfig } from "../actions/config.js";
 import { logger } from "../actions/logger.js";
+import { store, KEYS } from "../store.js";
 
 // ─── Dashboard HTML (embedded for zero-build portability) ───
 
@@ -298,6 +299,58 @@ function BranchesPanel({ state, onAction }) {
         ? h('div', { style: { textAlign: 'center', fontSize: 12, color: '#484f58', paddingTop: 8 } },
             '... and ' + (branches.length - 10) + ' more')
         : null,
+    )
+  );
+}
+
+function QuestionsPanel({ questions, onAnswer }) {
+  const [answers, setAnswers] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  if (!questions || questions.length === 0) return null;
+
+  return h('div', { className: 'panel', style: { gridColumn: '1 / -1', border: '2px solid #d29922' } },
+    h('div', { className: 'panel-title', style: { color: '#d29922' } },
+      '\u2753 Agent Needs Clarification'
+    ),
+    h('div', { className: 'panel-body' },
+      h('p', { style: { fontSize: 13, color: '#8b949e', margin: '0 0 12px 0' } },
+        'The agent needs more information to generate milestones from your vision:'
+      ),
+      questions.map((q, i) =>
+        h('div', { key: i, style: { marginBottom: 10 } },
+          h('label', { style: { display: 'block', fontSize: 13, color: '#c9d1d9', marginBottom: 4 } },
+            q
+          ),
+          h('input', {
+            type: 'text',
+            placeholder: 'Your answer...',
+            style: {
+              width: '100%', padding: '6px 10px', fontSize: 13, borderRadius: 4,
+              border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9',
+              outline: 'none', boxSizing: 'border-box',
+            },
+            onInput: (e) => {
+              const next = [...answers];
+              next[i] = e.target.value;
+              setAnswers(next);
+            },
+          })
+        )
+      ),
+      h('button', {
+        className: 'btn btn-primary',
+        disabled: submitting || answers.length < questions.length || answers.some(a => !a?.trim()),
+        onClick: async () => {
+          setSubmitting(true);
+          await fetch('/api/answer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ answers }),
+          });
+          setSubmitting(false);
+        },
+      }, submitting ? 'Sending...' : 'Submit Answers'),
     )
   );
 }
@@ -623,6 +676,11 @@ function App() {
       h(PatternsPanel, { state }),
     ),
 
+    // Questions (full width, only when pending)
+    state?.pendingQuestions
+      ? h(QuestionsPanel, { questions: state.pendingQuestions, onAnswer: handleAction })
+      : null,
+
     // Log (full width at bottom)
     h(LogPanel, { logs: state?.logs ?? [], logRef }),
   );
@@ -734,6 +792,7 @@ function collectApiState(): Record<string, unknown> {
     opportunities,
     patterns,
     activeOpportunity: activeOpportunity || null,
+    pendingQuestions: store.get(KEYS.PENDING_QUESTIONS) ?? null,
     lastRefresh: Date.now(),
   };
 }
@@ -807,6 +866,21 @@ export async function startDashboard(
           if (onAction) { onAction("promote"); } else {
             await promoteToMain(".");
             logger.info("Promoted dev → main.");
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+
+        if (path === "/api/answer" && req.method === "POST") {
+          // Read body for answers array
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+          const answers = body.answers as string[];
+          if (answers && answers.length > 0) {
+            store.set(KEYS.PENDING_ANSWERS, answers);
+            logger.info(`Received ${answers.length} answer(s) for pending questions.`);
           }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: true }));
