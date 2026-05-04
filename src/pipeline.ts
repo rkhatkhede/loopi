@@ -27,8 +27,8 @@
  * node to run the utility functions in this file (from dist/).
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
-import { resolve, dirname } from "path";
+import { existsSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from "fs";
+import { resolve } from "path";
 import { z } from "zod/v3";
 
 import {
@@ -59,6 +59,7 @@ import {
   AGENTS,
 } from "./types/index.js";
 
+import { store, KEYS } from "./store.js";
 import { logger } from "./actions/logger.js";
 import { getConfig } from "./actions/config.js";
 import { getGit, applyDiff, createCommit, createBranch, ensureBranch, mergeBranch, deleteBranch, getCurrentBranch, checkoutBranch, hasUncommittedChanges } from "./actions/git.js";
@@ -190,13 +191,12 @@ export function releaseLock(): void {
  * Read the vision document from disk. Returns null if missing.
  */
 export function readVision(): VisionDocument | null {
-  const path = resolve(process.cwd(), ".pi/loopi/vision.json");
-  if (!existsSync(path)) return null;
   try {
-    const raw = readFileSync(path, "utf-8");
-    return VisionSchema.parse(JSON.parse(raw));
+    const raw = store.get(KEYS.VISION);
+    if (!raw) return null;
+    return VisionSchema.parse(raw);
   } catch (err) {
-    logger.error(`Invalid vision.json: ${err}`);
+    logger.error(`Invalid vision data: ${err}`);
     return null;
   }
 }
@@ -205,40 +205,27 @@ export function readVision(): VisionDocument | null {
  * Save the vision document to disk.
  */
 export function saveVision(vision: VisionDocument): void {
-  const path = resolve(process.cwd(), ".pi/loopi/vision.json");
-  writeFileSync(path, JSON.stringify(vision, null, 2), "utf-8");
-  logger.info(`Vision saved to: ${path}`);
+  store.set(KEYS.VISION, vision);
+  logger.info("Vision saved.");
 }
 
 /**
  * Read opportunity history (suggested/accepted/rejected/applied).
  */
 export function readOpportunityHistory(): Opportunity[] {
-  const cfg = getConfig();
-  const path = resolve(
-    process.cwd(),
-    cfg.opportunity?.historyFile ?? ".pi/loopi/opportunity-history.json"
-  );
-  if (!existsSync(path)) return [];
   try {
-    return z
-      .array(OpportunitySchema)
-      .parse(JSON.parse(readFileSync(path, "utf-8")));
+    const raw = store.get(KEYS.OPPORTUNITIES);
+    if (!raw) return [];
+    return z.array(OpportunitySchema).parse(raw);
   } catch {
     return [];
   }
 }
 
 /**
- * Save an opportunity using atomic write (temp file + rename).
- * Prevents partial writes and read-modify-write clobbering.
+ * Save an opportunity (upsert by id) using conf's atomic store.
  */
 export function saveOpportunity(opportunity: Opportunity): void {
-  const cfg = getConfig();
-  const targetPath = resolve(
-    process.cwd(),
-    cfg.opportunity?.historyFile ?? ".pi/loopi/opportunity-history.json"
-  );
   const existing = readOpportunityHistory();
   const idx = existing.findIndex((o) => o.id === opportunity.id);
   if (idx >= 0) {
@@ -246,59 +233,51 @@ export function saveOpportunity(opportunity: Opportunity): void {
   } else {
     existing.push(opportunity);
   }
-  const tmpPath = resolve(dirname(targetPath), `.${Date.now()}.tmp`);
-  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
-  renameSync(tmpPath, targetPath);
+  store.set(KEYS.OPPORTUNITIES, existing);
 }
 
 /**
  * Read all patterns from disk.
  */
 export function readPatterns(): Pattern[] {
-  const path = resolve(process.cwd(), ".pi/loopi/patterns.json");
-  if (!existsSync(path)) return [];
   try {
-    return z.array(PatternSchema).parse(JSON.parse(readFileSync(path, "utf-8")));
+    const raw = store.get(KEYS.PATTERNS);
+    if (!raw) return [];
+    return z.array(PatternSchema).parse(raw);
   } catch {
     return [];
   }
 }
 
 /**
- * Append a pattern to the patterns file.
+ * Append a pattern using conf's atomic store.
  */
 export function savePattern(pattern: Pattern): void {
-  const path = resolve(process.cwd(), ".pi/loopi/patterns.json");
   const existing = readPatterns();
   existing.push(pattern);
-  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
-  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
-  renameSync(tmpPath, path);
+  store.set(KEYS.PATTERNS, existing);
   logger.info(`Pattern saved: ${pattern.summary}`);
 }
 
 // ─── Goals ───
 
-const GOALS_FILE = ".pi/loopi/goals.json";
-
 /**
  * Read all goals from disk.
  */
 export function readGoals(): Goal[] {
-  const path = resolve(process.cwd(), GOALS_FILE);
-  if (!existsSync(path)) return [];
   try {
-    return z.array(GoalSchema).parse(JSON.parse(readFileSync(path, "utf-8")));
+    const raw = store.get(KEYS.GOALS);
+    if (!raw) return [];
+    return z.array(GoalSchema).parse(raw);
   } catch {
     return [];
   }
 }
 
 /**
- * Save or update a goal using atomic write.
+ * Save or update a goal (upsert by id).
  */
 export function saveGoal(goal: Goal): void {
-  const path = resolve(process.cwd(), GOALS_FILE);
   const existing = readGoals();
   const idx = existing.findIndex((g) => g.id === goal.id);
   if (idx >= 0) {
@@ -306,43 +285,35 @@ export function saveGoal(goal: Goal): void {
   } else {
     existing.push(goal);
   }
-  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
-  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
-  renameSync(tmpPath, path);
+  store.set(KEYS.GOALS, existing);
 }
 
 /**
  * Replace all goals atomically (used during goal regeneration).
  */
 export function replaceGoals(goals: Goal[]): void {
-  const path = resolve(process.cwd(), GOALS_FILE);
-  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
-  writeFileSync(tmpPath, JSON.stringify(goals, null, 2), "utf-8");
-  renameSync(tmpPath, path);
+  store.set(KEYS.GOALS, goals);
 }
 
 // ─── Tasks ───
-
-const TASKS_FILE = ".pi/loopi/tasks.json";
 
 /**
  * Read all tasks from disk.
  */
 export function readTasks(): Task[] {
-  const path = resolve(process.cwd(), TASKS_FILE);
-  if (!existsSync(path)) return [];
   try {
-    return z.array(TaskSchema).parse(JSON.parse(readFileSync(path, "utf-8")));
+    const raw = store.get(KEYS.TASKS);
+    if (!raw) return [];
+    return z.array(TaskSchema).parse(raw);
   } catch {
     return [];
   }
 }
 
 /**
- * Save or update a task using atomic write.
+ * Save or update a task (upsert by id).
  */
 export function saveTask(task: Task): void {
-  const path = resolve(process.cwd(), TASKS_FILE);
   const existing = readTasks();
   const idx = existing.findIndex((t) => t.id === task.id);
   if (idx >= 0) {
@@ -350,9 +321,7 @@ export function saveTask(task: Task): void {
   } else {
     existing.push(task);
   }
-  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
-  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
-  renameSync(tmpPath, path);
+  store.set(KEYS.TASKS, existing);
 }
 
 /**
@@ -372,10 +341,7 @@ export function updateTaskStatus(
     }
   }
   if (!changed) return;
-  const path = resolve(process.cwd(), TASKS_FILE);
-  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
-  writeFileSync(tmpPath, JSON.stringify(tasks, null, 2), "utf-8");
-  renameSync(tmpPath, path);
+  store.set(KEYS.TASKS, tasks);
 }
 
 /**

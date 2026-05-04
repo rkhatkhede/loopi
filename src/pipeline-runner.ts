@@ -18,7 +18,7 @@
  *   6. Save state, report results
  */
 
-import { existsSync, appendFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, readFileSync } from "fs";
+import { existsSync, appendFileSync, mkdirSync } from "fs";
 import { resolve } from "path";
 import { exec } from "child_process";
 import crypto from "crypto";
@@ -39,6 +39,7 @@ import {
   compileImprovePrompt,
 } from "./prompts/prompts.js";
 import type { VisionDocument, Opportunity, Pattern, Task } from "./types/index.js";
+import { store, KEYS } from "./store.js";
 
 // ─── Helpers ───
 
@@ -109,27 +110,20 @@ let _progress: PipelineProgress = {
   patches: 0,
 };
 
-const STATE_FILE = resolve(process.cwd(), ".pi/loopi/state.json");
-
-/** Persist current progress to state.json so we can resume after crash */
+/** Persist current progress using conf's atomic store */
 function saveProgress(): void {
   try {
-    const dir = resolve(process.cwd(), ".pi/loopi");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const tmp = STATE_FILE + ".tmp." + process.pid;
-    writeFileSync(tmp, JSON.stringify(_progress, null, 2), "utf-8");
-    renameSync(tmp, STATE_FILE);
+    store.set(KEYS.PIPELINE_PROGRESS, _progress);
   } catch {
-    // best effort — state saving should never crash the pipeline
+    // best effort
   }
 }
 
-/** Load saved progress from disk — returns null if no saved state */
+/** Load saved progress — returns null if no saved state */
 function loadProgress(): PipelineProgress | null {
   try {
-    if (!existsSync(STATE_FILE)) return null;
-    const raw = readFileSync(STATE_FILE, "utf-8");
-    return JSON.parse(raw) as PipelineProgress;
+    const raw = store.get(KEYS.PIPELINE_PROGRESS) as PipelineProgress | undefined;
+    return raw ?? null;
   } catch {
     return null;
   }
@@ -138,7 +132,7 @@ function loadProgress(): PipelineProgress | null {
 /** Clear saved state (called on successful completion) */
 function clearProgress(): void {
   try {
-    if (existsSync(STATE_FILE)) unlinkSync(STATE_FILE);
+    store.delete(KEYS.PIPELINE_PROGRESS);
   } catch {
     // best effort
   }
