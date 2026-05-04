@@ -20,6 +20,7 @@ import { resolve } from "path";
 import { getPipelineProgress } from "../pipeline-runner.js";
 import {
   readVision, readOpportunityHistory, readPatterns,
+  readGoals, readTasks,
   approveFeatureBranch, rejectFeatureBranch, getActiveFeatureBranches,
   promoteToMain,
 } from "../pipeline.js";
@@ -337,28 +338,120 @@ function LogPanel({ logs, logRef }) {
   );
 }
 
-function MilestonesPanel({ state }) {
-  const milestones = state?.milestones ?? [];
-  if (!milestones.length) return null;
-
-  const total = milestones.length;
-  const done = milestones.filter(m => m.status === 'completed').length;
-
-  return h('div', { className: 'panel' },
-    h('div', { className: 'panel-title' }, 'Milestones ' + done + '/' + total),
+function VisionPanel({ state }) {
+  const v = state?.vision;
+  if (!v) return null;
+  return h('div', { className: 'panel', style: { gridColumn: '1 / -1' } },
+    h('div', { className: 'panel-title' }, '\uD83C\uDF0D Vision'),
     h('div', { className: 'panel-body' },
-      milestones.slice(0, 8).map(m =>
-        h('div', { className: 'milestone-item', key: m.name || m.id },
-          h('span', null, m.name || m.id),
-          h('span', { className: 'milestone-status ' + (m.status === 'completed' ? 'completed' : 'pending') },
-            m.status === 'completed' ? '\u2713 Done' : '\u25CB ' + capitalize(m.status || 'pending')
-          ),
-        )
-      ),
-      milestones.length > 8
-        ? h('div', { style: { textAlign: 'center', fontSize: 12, color: '#484f58', paddingTop: 8 } },
-            '... and ' + (milestones.length - 8) + ' more')
+      v.northStar
+        ? h('div', { className: 'info-row' },
+            h('span', { className: 'label' }, 'North Star'),
+            h('span', { className: 'value', style: { color: '#58a6ff', fontStyle: 'italic' } }, v.northStar)
+          )
         : null,
+      h('div', { className: 'info-row' },
+        h('span', { className: 'label' }, 'Description'),
+        h('span', { className: 'value' }, v.projectDescription || '')
+      ),
+      v.businessGoals && v.businessGoals.length > 0
+        ? h('div', { style: { paddingTop: 4, fontSize: 13, color: '#8b949e' } },
+            'Goals: ' + v.businessGoals.join(', ')
+          )
+        : null,
+    )
+  );
+}
+
+function HierarchyPanel({ state }) {
+  const milestones = state?.milestones ?? [];
+  const goals = state?.goals ?? [];
+  const tasks = state?.tasks ?? [];
+  if (!milestones.length && !goals.length && !tasks.length) return null;
+
+  const activeMilestone = milestones.find(m => m.status === 'in_progress' || m.status === 'pending');
+  const activeMilestoneIdx = milestones.indexOf(activeMilestone || milestones[0]);
+
+  return h('div', { className: 'panel', style: { gridColumn: '1 / -1' } },
+    h('div', { className: 'panel-title' },
+      '\uD83D\uDCCB Milestones \u2192 Goals \u2192 Tasks'
+    ),
+    h('div', { className: 'panel-body', style: { maxHeight: 260, overflowY: 'auto' } },
+      milestones.length === 0
+        ? h('div', { className: 'empty' }, 'No milestones yet \u2014 vision may not be set up')
+        : milestones.map((m, mi) => {
+            const mGoals = goals.filter(g => g.milestoneIndex === mi);
+            const isActive = m.status === 'in_progress';
+            const isDone = m.status === 'completed';
+            const expanded = isActive || (mi === activeMilestoneIdx);
+
+            return h('div', { key: mi, style: { marginBottom: 8 } },
+              h('div', {
+                style: {
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '6px 8px', borderRadius: 6,
+                  background: isActive ? '#0b2e1c' : isDone ? '#1c2128' : 'transparent',
+                  border: isActive ? '1px solid #238636' : '1px solid transparent',
+                  fontSize: 14, fontWeight: 600,
+                }
+              },
+                h('span', { style: { color: isDone ? '#3fb950' : isActive ? '#3fb950' : '#58a6ff' } },
+                  isDone ? '\u2713' : isActive ? '\u25B6' : '\u25CB'
+                ),
+                h('span', { style: { flex: 1 } }, m.name || m.id),
+                m.status
+                  ? h('span', {
+                      style: { fontSize: 11, padding: '2px 8px', borderRadius: 10, background: isDone ? '#0b2e1c' : '#1c2128', color: isDone ? '#3fb950' : '#8b949e' }
+                    }, isDone ? 'Done' : isActive ? 'In Progress' : 'Pending')
+                  : null,
+              ),
+              expanded && mGoals.length > 0
+                ? h('div', { style: { paddingLeft: 24, paddingTop: 4 } },
+                    mGoals.map(g => {
+                      const gTasks = tasks.filter(t => t.goalId === g.id);
+                      const gDone = g.status === 'completed';
+                      const gActive = g.status === 'in_progress';
+                      return h('div', { key: g.id, style: { marginBottom: 4 } },
+                        h('div', {
+                          style: {
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            padding: '4px 6px', borderRadius: 4,
+                            fontSize: 13, color: gDone ? '#8b949e' : gActive ? '#7ee787' : '#c9d1d9',
+                          }
+                        },
+                          h('span', { style: { color: gDone ? '#3fb950' : '#8b949e' } }, gDone ? '\u2713' : '\u25CB'),
+                          h('span', { style: { flex: 1 } }, g.name || 'Goal'),
+                          g.priority === 'high' ? h('span', { style: { fontSize: 10, color: '#f85149' } }, 'HIGH') : null,
+                          h('span', { style: { fontSize: 11, color: gDone ? '#3fb950' : '#8b949e' } },
+                            gDone && g.completedAt ? new Date(g.completedAt).toLocaleDateString() : ''
+                          ),
+                        ),
+                        gTasks.length > 0
+                          ? h('div', { style: { paddingLeft: 20, paddingTop: 2 } },
+                              gTasks.map(t => {
+                                const tDone = t.status === 'completed';
+                                const tFailed = t.status === 'failed';
+                                return h('div', {
+                                  key: t.id,
+                                  style: {
+                                    display: 'flex', alignItems: 'center', gap: 4,
+                                    padding: '2px 4px', fontSize: 12,
+                                    color: tDone ? '#484f58' : tFailed ? '#f85149' : '#8b949e',
+                                  }
+                                },
+                                  h('span', null, tDone ? '\u2713' : tFailed ? '\u2717' : '\u2022'),
+                                  h('span', { style: { flex: 1 } }, (t.name || '').slice(0, 60)),
+                                  t.impact === 'high' ? h('span', { style: { fontSize: 10, color: '#f85149' } }, '!') : null,
+                                );
+                              })
+                            )
+                          : null,
+                      );
+                    })
+                  )
+                : null,
+            );
+          })
     )
   );
 }
@@ -418,11 +511,16 @@ function App() {
         )
       : null,
 
+    // Vision
+    h(VisionPanel, { state }),
+
+    // Hierarchy: Milestones -> Goals -> Tasks
+    h(HierarchyPanel, { state }),
+
     // Grid
     h('div', { className: 'grid' },
       h(PipelinePanel, { state }),
       h(BranchesPanel, { state, onAction: handleAction }),
-      h(MilestonesPanel, { state }),
     ),
 
     // Log
@@ -475,13 +573,25 @@ function collectApiState(): Record<string, unknown> {
   try { pendingCount = listPending().length; } catch { /* ignore */ }
   try { approvedCount = listApproved().length; } catch { /* ignore */ }
 
-  // Vision / milestones
+  // Vision, milestones, goals, tasks
+  let visionData: Record<string, unknown> | null = null;
   let milestones: Array<Record<string, unknown>> = [];
+  let goals: Array<Record<string, unknown>> = [];
+  let tasks: Array<Record<string, unknown>> = [];
   let activeOpportunity = "";
   try {
-    const vision = readVision();
-    if (vision?.milestones) milestones = vision.milestones as Array<Record<string, unknown>>;
+    const v = readVision();
+    if (v) {
+      visionData = {
+        projectDescription: v.projectDescription,
+        northStar: v.northStar ?? "",
+        businessGoals: v.businessGoals ?? [],
+      };
+      milestones = (v.milestones ?? []) as Array<Record<string, unknown>>;
+    }
   } catch { /* ignore */ }
+  try { goals = readGoals() as unknown as Array<Record<string, unknown>>; } catch { /* ignore */ }
+  try { tasks = readTasks() as unknown as Array<Record<string, unknown>>; } catch { /* ignore */ }
   try {
     const history = readOpportunityHistory();
     const active = history.find(o => o.status === "accepted" || o.status === "suggested");
@@ -508,7 +618,10 @@ function collectApiState(): Record<string, unknown> {
     pendingCount,
     approvedCount,
     logs,
+    vision: visionData,
     milestones,
+    goals,
+    tasks,
     activeOpportunity: activeOpportunity || null,
     patternCount,
     lastRefresh: Date.now(),

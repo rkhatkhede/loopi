@@ -52,6 +52,10 @@ import {
   type Pattern,
   type Config,
   type CycleResult,
+  GoalSchema,
+  type Goal,
+  TaskSchema,
+  type Task,
   AGENTS,
 } from "./types/index.js";
 
@@ -271,6 +275,107 @@ export function savePattern(pattern: Pattern): void {
   writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
   renameSync(tmpPath, path);
   logger.info(`Pattern saved: ${pattern.summary}`);
+}
+
+// ─── Goals ───
+
+const GOALS_FILE = ".pi/loopi/goals.json";
+
+/**
+ * Read all goals from disk.
+ */
+export function readGoals(): Goal[] {
+  const path = resolve(process.cwd(), GOALS_FILE);
+  if (!existsSync(path)) return [];
+  try {
+    return z.array(GoalSchema).parse(JSON.parse(readFileSync(path, "utf-8")));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save or update a goal using atomic write.
+ */
+export function saveGoal(goal: Goal): void {
+  const path = resolve(process.cwd(), GOALS_FILE);
+  const existing = readGoals();
+  const idx = existing.findIndex((g) => g.id === goal.id);
+  if (idx >= 0) {
+    existing[idx] = goal;
+  } else {
+    existing.push(goal);
+  }
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
+  renameSync(tmpPath, path);
+}
+
+/**
+ * Replace all goals atomically (used during goal regeneration).
+ */
+export function replaceGoals(goals: Goal[]): void {
+  const path = resolve(process.cwd(), GOALS_FILE);
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(goals, null, 2), "utf-8");
+  renameSync(tmpPath, path);
+}
+
+// ─── Tasks ───
+
+const TASKS_FILE = ".pi/loopi/tasks.json";
+
+/**
+ * Read all tasks from disk.
+ */
+export function readTasks(): Task[] {
+  const path = resolve(process.cwd(), TASKS_FILE);
+  if (!existsSync(path)) return [];
+  try {
+    return z.array(TaskSchema).parse(JSON.parse(readFileSync(path, "utf-8")));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save or update a task using atomic write.
+ */
+export function saveTask(task: Task): void {
+  const path = resolve(process.cwd(), TASKS_FILE);
+  const existing = readTasks();
+  const idx = existing.findIndex((t) => t.id === task.id);
+  if (idx >= 0) {
+    existing[idx] = task;
+  } else {
+    existing.push(task);
+  }
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(existing, null, 2), "utf-8");
+  renameSync(tmpPath, path);
+}
+
+/**
+ * Update the status of multiple tasks at once (e.g. mark all failed).
+ */
+export function updateTaskStatus(
+  taskIds: string[],
+  status: Task["status"]
+): void {
+  const tasks = readTasks();
+  let changed = false;
+  for (const task of tasks) {
+    if (taskIds.includes(task.id) && task.status !== status) {
+      task.status = status;
+      if (status === "completed") task.completedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  const path = resolve(process.cwd(), TASKS_FILE);
+  const tmpPath = resolve(dirname(path), `.${Date.now()}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(tasks, null, 2), "utf-8");
+  renameSync(tmpPath, path);
 }
 
 /**

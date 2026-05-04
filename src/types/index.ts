@@ -237,6 +237,48 @@ export const PatternSchema = z.object({
 export type Pattern = z.infer<typeof PatternSchema>;
 
 // ──────────────────────────────────────────────
+// Goal (checkpoint outcome toward a milestone)
+// ──────────────────────────────────────────────
+
+export const GoalSchema = z.object({
+  id: z.string(),
+  /** Index into the vision document's milestones array */
+  milestoneIndex: z.number().int().nonnegative(),
+  name: z.string().min(1).max(200),
+  description: z.string().default(""),
+  priority: z.enum(["low", "medium", "high"]).default("medium"),
+  status: z
+    .enum(["pending", "in_progress", "completed", "abandoned"])
+    .default("pending"),
+  createdAt: z.string(),
+  completedAt: z.string().optional(),
+});
+export type Goal = z.infer<typeof GoalSchema>;
+
+// ──────────────────────────────────────────────
+// Task (concrete action toward a goal)
+// ──────────────────────────────────────────────
+
+export const TaskSchema = z.object({
+  id: z.string(),
+  goalId: z.string(),
+  name: z.string().min(1).max(200),
+  description: z.string().default(""),
+  impact: z.enum(["low", "medium", "high"]).default("medium"),
+  effort: z.enum(["small", "medium", "large"]).default("medium"),
+  category: z.string().default("quality"),
+  status: z
+    .enum(["pending", "in_progress", "completed", "failed"])
+    .default("pending"),
+  filesAffected: z.array(z.string()).default([]),
+  cycleNumber: z.number().int().nonnegative().optional(),
+  createdAt: z.string(),
+  completedAt: z.string().optional(),
+  errorMessage: z.string().optional(),
+});
+export type Task = z.infer<typeof TaskSchema>;
+
+// ──────────────────────────────────────────────
 // Default config (embedded, no file required)
 // ──────────────────────────────────────────────
 

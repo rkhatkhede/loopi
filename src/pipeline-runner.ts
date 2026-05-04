@@ -26,6 +26,8 @@ import { logger } from "./actions/logger.js";
 import {
   readVision, saveVision, saveOpportunity, readOpportunityHistory,
   readPatterns, savePattern,
+  readGoals, saveGoal,
+  readTasks, saveTask,
   applyPatch, approveFeatureBranch, rejectFeatureBranch
 } from "./pipeline.js";
 import { RPCClient } from "./rpc-client.js";
@@ -36,7 +38,7 @@ import {
   compileExecutePrompt,
   compileImprovePrompt,
 } from "./prompts/prompts.js";
-import type { VisionDocument, Opportunity, Pattern } from "./types/index.js";
+import type { VisionDocument, Opportunity, Pattern, Task } from "./types/index.js";
 
 // ─── Helpers ───
 
@@ -727,6 +729,56 @@ export async function runAutoPipeline(): Promise<PipelineProgress> {
           // best effort
         }
       }
+    }
+
+    // Auto-generate a goal for the active milestone and persist tasks
+    const activeMilestoneIdx = vision.milestones?.findIndex(
+      m => m.status === "pending" || m.status === "in_progress"
+    ) ?? -1;
+    let currentGoalId: string | null = null;
+    if (activeMilestoneIdx >= 0 && tasks.length > 0) {
+      const existingGoals = readGoals();
+      const milestoneName = vision.milestones![activeMilestoneIdx]!.name;
+      // Reuse an existing in_progress goal for this milestone, or create one
+      let goal = existingGoals.find(
+        g => g.milestoneIndex === activeMilestoneIdx && g.status !== "completed"
+      );
+      if (!goal) {
+        goal = {
+          id: uuid(),
+          milestoneIndex: activeMilestoneIdx,
+          name: `Improve: ${milestoneName}`,
+          description: `Auto-generated goal for milestone: ${milestoneName}`,
+          priority: "high",
+          status: "in_progress",
+          createdAt: new Date().toISOString(),
+        };
+        saveGoal(goal);
+        log(`  Created goal: "${goal.name}"`);
+      }
+      currentGoalId = goal.id;
+
+      // Persist each analyze task
+      for (const at of tasks) {
+        const existingTasks = readTasks();
+        const alreadyExists = existingTasks.some(t => t.name === at.title);
+        if (!alreadyExists) {
+          const persistentTask: Task = {
+            id: uuid(),
+            goalId: currentGoalId,
+            name: at.title,
+            description: at.description,
+            impact: at.impact as "low" | "medium" | "high",
+            effort: at.effort as "small" | "medium" | "large",
+            category: at.category ?? "quality",
+            status: "pending",
+            filesAffected: at.filesLikelyAffected ?? [],
+            createdAt: new Date().toISOString(),
+          };
+          saveTask(persistentTask);
+        }
+      }
+      log(`  Persisted ${tasks.length} task(s) under goal "${goal.name}"`);
     }
     await sleep(10);
 
